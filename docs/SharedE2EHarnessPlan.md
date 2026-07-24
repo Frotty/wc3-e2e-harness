@@ -369,10 +369,11 @@ Terminal evidence is processed in this order:
 The clean quit sequence is bounded and starts as soon as terminal evidence is known:
 
 - foreground the window;
-- use Escape to normalize modal/chat state;
-- open the F10 menu;
-- issue the menu hotkey for leaving or quitting;
-- confirm process exit.
+- send Alt+F4 — with replays out of the result path there is nothing to preserve, so no menu
+  navigation (the old F10/End-Game route existed only to make `LastReplay.w3g` flush);
+- confirm process exit;
+- force-terminate every remaining Warcraft III process (the `-launch` flow can leave a second pid
+  that would block the next run) — only after result artifacts are durable.
 
 If clean quit exceeds its budget, the runner may terminate the process only after result artifacts are
 durable. The result records whether shutdown was clean or forced.
