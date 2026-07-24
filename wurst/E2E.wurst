@@ -1,0 +1,23 @@
+package E2E
+// import FileIO — the runtime builds on stdlib FileIO/ChunkedString; re-add with the implementation.
+
+/*  Shared WC3 E2E harness — map-side runtime.
+
+    See docs/SharedE2EHarnessPlan.md for the full design. In short:
+    - The Node runner writes a one-shot ARMED launch file (stdlib FileIO format)
+      into CustomMapData/wc3-e2e/<project-id>/ before Warcraft III spawns.
+    - This runtime reads it during the earliest init hook, arms E2E mode,
+      emits READY, and starts the registered suite on the first game-time tick.
+    - Results and heartbeats go back through alternating output files.
+    - There is no mid-game harness-to-map channel.
+
+    Planned API (see plan doc, "Wurst Runtime API"):
+      E2E.register("za-1", () -> runScenario())
+      E2E.isActive()
+      E2E.assertTrue("assertion-id", condition)
+      E2E.event("event-id", payload)
+      E2E.finish()
+*/
+
+/** Bumped on every protocol change; echoed in READY and verified by the runner. */
+public constant E2E_PROTOCOL_VERSION = 1
