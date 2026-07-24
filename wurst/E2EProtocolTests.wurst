@@ -1,0 +1,38 @@
+package E2EProtocolTests
+import E2EProtocol
+
+// Shared vectors with node/test/protocol.test.cjs — both implementations must
+// produce these exact values.
+@Test function fnvVectors()
+	fnv1a32Hex("").assertEquals("811c9dc5")
+	fnv1a32Hex("a").assertEquals("e40c292c")
+	fnv1a32Hex("foobar").assertEquals("bf9cf968")
+
+@Test function frameRoundTrip()
+	let framed = encodeFrame("hello world")
+	// exact output of the Node encodeFrame("hello world") — cross-language lockstep
+	framed.assertEquals("E2E1|11|d58b3fa7|hello world|END")
+	let decoded = decodeFrame(framed)
+	decoded.ok.assertTrue()
+	decoded.body.assertEquals("hello world")
+
+@Test function frameRejectsTamperAndTruncation()
+	let framed = encodeFrame("hello world")
+	decodeFrame(framed.substring(0, framed.length() - 4)).ok.assertFalse()
+	decodeFrame("garbage").ok.assertFalse()
+	decodeFrame("").ok.assertFalse()
+
+@Test function transposeRoundTrip()
+	let original = "say \"hi\" \\ path ~ tilde"
+	let encoded = transpose(original)
+	// no quotes or backslashes may survive for stdlib FileIO
+	for i = 0 to encoded.length() - 1
+		(encoded.charAt(i) != "\"" and encoded.charAt(i) != "\\").assertTrue()
+	untranspose(encoded).assertEquals(original)
+
+@Test function keyValueParsing()
+	let body = "armed;v=1;projectId=canary;suiteId=canary-pass"
+	keyValue(body, "v").assertEquals("1")
+	keyValue(body, "projectId").assertEquals("canary")
+	keyValue(body, "suiteId").assertEquals("canary-pass")
+	keyValue(body, "missing").assertEquals("")

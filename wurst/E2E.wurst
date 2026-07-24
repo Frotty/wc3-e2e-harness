@@ -1,23 +1,188 @@
 package E2E
-// import FileIO — the runtime builds on stdlib FileIO/ChunkedString; re-add with the implementation.
+import FileIO
+import E2EProtocol
+import ClosureTimers
+import LinkedList
 
-/*  Shared WC3 E2E harness — map-side runtime.
+/*  Shared WC3 E2E harness — map-side runtime (docs/SharedE2EHarnessPlan.md).
 
-    See docs/SharedE2EHarnessPlan.md for the full design. In short:
-    - The Node runner writes a one-shot ARMED launch file (stdlib FileIO format)
-      into CustomMapData/wc3-e2e/<project-id>/ before Warcraft III spawns.
-    - This runtime reads it during the earliest init hook, arms E2E mode,
-      emits READY, and starts the registered suite on the first game-time tick.
-    - Results and heartbeats go back through alternating output files.
-    - There is no mid-game harness-to-map channel.
+	The Node runner writes a one-shot ARMED launch file (frame-wrapped
+	key=value body) into CustomMapData/wc3-e2e/<projectId>/ before Warcraft
+	III spawns. E2E.bootstrap() reads it during the adapter's earliest init,
+	arms E2E mode, emits READY, and starts the registered suite on the first
+	game-time tick. Results and heartbeats go back through alternating output
+	files as frame-wrapped, transposed JSON envelopes. There is no mid-game
+	harness-to-map channel.
 
-    Planned API (see plan doc, "Wurst Runtime API"):
-      E2E.register("za-1", () -> runScenario())
-      E2E.isActive()
-      E2E.assertTrue("assertion-id", condition)
-      E2E.event("event-id", payload)
-      E2E.finish()
+	Adapter usage:
+		E2E.register("za-1") ->
+			runFarHoleScenario()
+		E2E.bootstrap("zombie-defense")
+		if not E2E.isActive()
+			// normal map startup
 */
 
 /** Bumped on every protocol change; echoed in READY and verified by the runner. */
 public constant E2E_PROTOCOL_VERSION = 1
+
+constant HEARTBEAT_INTERVAL = 2.0
+constant MAX_FAILED_IDS = 8
+constant MAX_EVENT_KINDS = 16
+
+public interface E2ESuiteBody
+	function run()
+
+class Registration
+	string suiteId
+	E2ESuiteBody body
+
+	construct(string suiteId, E2ESuiteBody body)
+		this.suiteId = suiteId
+		this.body = body
+
+class EventCounter
+	string id
+	var count = 1
+
+	construct(string id)
+		this.id = id
+
+public class E2E
+	private static constant registrations = new LinkedList<Registration>()
+	private static constant events = new LinkedList<EventCounter>()
+	private static var active = false
+	private static var finished = false
+	private static var heartbeatsStopped = false
+	private static string projectId = ""
+	private static string buildId = ""
+	private static string runId = ""
+	private static string nonce = ""
+	private static string suiteId = ""
+	private static var seq = 0
+	private static var heartbeatCount = 0
+	private static var gameSeconds = 0.
+	private static var assertsPassed = 0
+	private static var assertsFailed = 0
+	private static var failedIds = ""
+	private static var failedIdCount = 0
+	private static var useFileA = true
+
+	static function register(string suiteId, E2ESuiteBody body)
+		registrations.add(new Registration(suiteId, body))
+
+	static function isActive() returns boolean
+		return active
+
+	/** Call from the adapter's earliest init hook, after registrations. */
+	static function bootstrap(string expectedProjectId)
+		let launch = new File("wc3-e2e/" + expectedProjectId + "/armed.pld")
+			.readAsString(GetLocalPlayer())
+		let frame = decodeFrame(launch)
+		if not frame.ok
+			return // no (valid) launch file: normal map start
+		let body = frame.body
+		if keyValue(body, "v") != I2S(E2E_PROTOCOL_VERSION)
+			return
+		if keyValue(body, "projectId") != expectedProjectId
+			return
+		projectId = expectedProjectId
+		buildId = keyValue(body, "buildId")
+		runId = keyValue(body, "runId")
+		nonce = keyValue(body, "nonce")
+		suiteId = keyValue(body, "suiteId")
+		if runId == "" or nonce == "" or suiteId == ""
+			return
+		active = true
+		emit("READY", "{" + q("canReadFiles") + ":" + boolStr(CAN_READ_FILES) + "}")
+		// First game-time tick: the game clock only advances once the loading
+		// screen and post-load pause are cleared, so this IS the start gate.
+		doAfter(0.) ->
+			startSuite()
+
+	static function assertTrue(string id, boolean condition)
+		if not active or finished
+			return
+		if condition
+			assertsPassed++
+		else
+			assertsFailed++
+			if failedIdCount < MAX_FAILED_IDS
+				failedIds += (failedIdCount > 0 ? "," : "") + id
+				failedIdCount++
+
+	// "event" itself collides with the JASS native type name.
+	static function recordEvent(string id)
+		if not active or finished
+			return
+		for counter in events
+			if counter.id == id
+				counter.count++
+				return
+		if events.size() < MAX_EVENT_KINDS
+			events.add(new EventCounter(id))
+
+	static function finish()
+		if not active or finished
+			return
+		finished = true
+		let verdict = assertsFailed == 0 ? "PASS" : "FAIL"
+		emit(verdict, resultPayload())
+
+	/** Canary/testing hook: silences heartbeats without finishing. */
+	static function stopHeartbeats()
+		heartbeatsStopped = true
+
+	private static function startSuite()
+		Registration match = null
+		for registration in registrations
+			if registration.suiteId == suiteId
+				match = registration
+		if match == null
+			finished = true
+			emit("FAIL", "{" + q("error") + ":" + q("unknown-suite") + "}")
+			return
+		emit("RUNNING", "{}")
+		doPeriodically(HEARTBEAT_INTERVAL) cb ->
+			if finished
+				destroy cb
+			else
+				gameSeconds += HEARTBEAT_INTERVAL
+				if not heartbeatsStopped
+					heartbeatCount++
+					emit("RUNNING", "{}")
+		match.body.run()
+
+	private static function resultPayload() returns string
+		var eventsJson = "{"
+		var first = true
+		for counter in events
+			eventsJson += (first ? "" : ",") + q(counter.id) + ":" + I2S(counter.count)
+			first = false
+		eventsJson += "}"
+		return "{" + q("asserts") + ":" + I2S(assertsPassed + assertsFailed)
+			+ "," + q("failed") + ":" + I2S(assertsFailed)
+			+ "," + q("failedIds") + ":" + q(failedIds)
+			+ "," + q("events") + ":" + eventsJson + "}"
+
+	private static function emit(string state, string payloadJson)
+		seq++
+		let json = "{" + q("v") + ":" + I2S(E2E_PROTOCOL_VERSION)
+			+ "," + q("projectId") + ":" + q(projectId)
+			+ "," + q("buildId") + ":" + q(buildId)
+			+ "," + q("runId") + ":" + q(runId)
+			+ "," + q("nonce") + ":" + q(nonce)
+			+ "," + q("suiteId") + ":" + q(suiteId)
+			+ "," + q("seq") + ":" + I2S(seq)
+			+ "," + q("state") + ":" + q(state)
+			+ "," + q("gameTime") + ":" + R2S(gameSeconds)
+			+ "," + q("heartbeat") + ":" + I2S(heartbeatCount)
+			+ "," + q("payload") + ":" + payloadJson + "}"
+		let path = "wc3-e2e/" + projectId + "/output-" + (useFileA ? "a" : "b") + ".pld"
+		useFileA = not useFileA
+		new File(path)..write(GetLocalPlayer(), encodeFrame(transpose(json)))..close()
+
+	private static function q(string value) returns string
+		return "\"" + value + "\""
+
+	private static function boolStr(boolean value) returns string
+		return value ? "true" : "false"

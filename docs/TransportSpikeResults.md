@@ -38,6 +38,9 @@ map built from this repository (`wurst/TransportSpike.wurst`).
 
 ## Cleanup contract
 
-`wurst/TransportSpike.wurst`, `wurst/FileIO_config.wurst`, and `node/spike/` are throwaway and
-must be deleted at the end of Phase 0, before any consumer adds this repository as a dependency
-(the `FileIO_config` package would clash with consumer overrides).
+`wurst/TransportSpike.wurst` and `node/spike/` were deleted in Phase 2, superseded by the canary
+(`wurst/CanaryAdapter.wurst` + `node/canary/run-canary.cjs`, which also covers the deferred
+heartbeat observation). Still outstanding: `wurst/FileIO_config.wurst` and `CanaryAdapter` live in
+the root `wurst/` folder that dependents compile — both must move out (per the planned layout)
+before any consumer adds this repository as a dependency, or the `FileIO_config` package clashes
+with consumer overrides and canary suites leak into consumer maps.

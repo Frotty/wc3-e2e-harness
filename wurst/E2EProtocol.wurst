@@ -1,0 +1,140 @@
+package E2EProtocol
+import ErrorHandling
+
+/*  Protocol primitives shared with the Node side (node/src/protocol/).
+	The Node tests and E2EProtocolTests assert the same vectors, keeping the
+	two implementations in lockstep.
+
+	Frame format:  E2E1|<bodyLength>|<fnv1a32 hex of body>|<body>|END
+	Transpose:     ~ -> ~~   " -> ~q   \ -> ~b   (stdlib FileIO forbids " and \)
+*/
+
+// ASCII 32..126 in order; charCode(c) = 32 + index.
+constant CHARSET = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+constant HEX_CHARS = "0123456789abcdef"
+
+public function charCode(string ch) returns int
+	for i = 0 to CHARSET.length() - 1
+		if CHARSET.charAt(i) == ch
+			return 32 + i
+	error("E2EProtocol: non-ascii character in protocol content")
+	return -1
+
+// xor of two non-negative ints < 65536, no bitwise natives needed.
+function xor16(int a, int b) returns int
+	var result = 0
+	var bit = 1
+	var x = a
+	var y = b
+	while x > 0 or y > 0
+		if (x mod 2) != (y mod 2)
+			result += bit
+		x = x div 2
+		y = y div 2
+		bit *= 2
+	return result
+
+/*	FNV-1a 32-bit, kept as two 16-bit limbs so every intermediate stays below
+	2^31. That makes the math identical on the compiletime interpreter
+	(Java 32-bit ints), the Lua backend (64-bit ints), and Jass.
+	prime 16777619 = 256 * 65536 + 403. */
+public function fnv1a32Hex(string text) returns string
+	var hi = 33052 // 0x811C
+	var lo = 40389 // 0x9DC5
+	for i = 0 to text.length() - 1
+		lo = xor16(lo, charCode(text.charAt(i)))
+		let t0 = lo * 403
+		let tMid = lo * 256 + hi * 403 + t0 div 65536
+		lo = t0 mod 65536
+		hi = tMid mod 65536
+	return hex16(hi) + hex16(lo)
+
+function hex16(int value) returns string
+	var out = ""
+	var x = value
+	for _i = 1 to 4
+		out = HEX_CHARS.charAt(x mod 16) + out
+		x = x div 16
+	return out
+
+public function transpose(string text) returns string
+	var out = ""
+	for i = 0 to text.length() - 1
+		let ch = text.charAt(i)
+		if ch == "~"
+			out += "~~"
+		else if ch == "\""
+			out += "~q"
+		else if ch == "\\"
+			out += "~b"
+		else
+			out += ch
+	return out
+
+public function untranspose(string text) returns string
+	var out = ""
+	var i = 0
+	while i < text.length()
+		let ch = text.charAt(i)
+		if ch != "~"
+			out += ch
+			i++
+		else
+			let next = i + 1 < text.length() ? text.charAt(i + 1) : ""
+			if next == "~"
+				out += "~"
+			else if next == "q"
+				out += "\""
+			else if next == "b"
+				out += "\\"
+			else
+				error("E2EProtocol: invalid transpose escape")
+			i += 2
+	return out
+
+public function encodeFrame(string body) returns string
+	return "E2E1|" + I2S(body.length()) + "|" + fnv1a32Hex(body) + "|" + body + "|END"
+
+public tuple parsedFrame(boolean ok, string body)
+
+public function decodeFrame(string text) returns parsedFrame
+	if text.length() < 19 or text.substring(0, 5) != "E2E1|"
+		return parsedFrame(false, "")
+	var pos = 5
+	var lenStr = ""
+	while pos < text.length() and text.charAt(pos) != "|"
+		lenStr += text.charAt(pos)
+		pos++
+	if lenStr.length() == 0 or pos >= text.length()
+		return parsedFrame(false, "")
+	let bodyLen = S2I(lenStr)
+	pos++ // skip |
+	if pos + 8 >= text.length()
+		return parsedFrame(false, "")
+	let declaredHash = text.substring(pos, pos + 8)
+	pos += 8
+	if text.charAt(pos) != "|"
+		return parsedFrame(false, "")
+	pos++
+	if text.length() != pos + bodyLen + 4
+		return parsedFrame(false, "")
+	let body = text.substring(pos, pos + bodyLen)
+	if text.substring(pos + bodyLen, text.length()) != "|END"
+		return parsedFrame(false, "")
+	if fnv1a32Hex(body) != declaredHash
+		return parsedFrame(false, "")
+	return parsedFrame(true, body)
+
+// Value of `key=` in a `;`-separated key=value body ("" when absent).
+public function keyValue(string body, string key) returns string
+	let needle = key + "="
+	var segStart = 0
+	var i = 0
+	while i <= body.length()
+		if i == body.length() or body.charAt(i) == ";"
+			let seg = body.substring(segStart, i)
+			if seg.length() > needle.length() and seg.substring(0, needle.length()) == needle
+				return seg.substring(needle.length(), seg.length())
+			segStart = i + 1
+		i++
+	return ""

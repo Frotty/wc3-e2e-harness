@@ -427,7 +427,7 @@ The shared dependency should expose a deliberately small API:
 E2E.register("za-1", () -> runFarHoleScenario())     // suite body, runs on first game-time tick
 E2E.isActive()                                       // adapters gate normal startup on this
 E2E.assertTrue("wall-focus-retained", condition)
-E2E.event("target-change", compactPayload)
+E2E.recordEvent("target-change")   // "event" is a JASS native type name
 E2E.finish()
 ```
 

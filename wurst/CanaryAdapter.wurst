@@ -1,0 +1,42 @@
+package CanaryAdapter
+import E2E
+import ClosureTimers
+
+/*  Canary suites (plan: "Native canary suites"). This repository's own map is
+	the canary: it exercises every runtime state against the real game without
+	any project fixtures. Suites:
+
+	  canary-pass   READY -> RUNNING -> heartbeats -> PASS
+	  canary-fail   deliberate assertion failure -> FAIL
+	  canary-stall  heartbeats stop without a terminal result
+	  canary-delay  result only after a longer runtime
+*/
+
+init
+	E2E.register("canary-pass") ->
+		E2E.assertTrue("boots", true)
+		E2E.recordEvent("canary-event")
+		E2E.recordEvent("canary-event")
+		doAfter(5.) ->
+			E2E.assertTrue("waited", true)
+			E2E.finish()
+
+	E2E.register("canary-fail") ->
+		E2E.assertTrue("boots", true)
+		doAfter(3.) ->
+			E2E.assertTrue("deliberate-failure", false)
+			E2E.finish()
+
+	E2E.register("canary-stall") ->
+		E2E.assertTrue("boots", true)
+		doAfter(4.) ->
+			E2E.stopHeartbeats()
+
+	E2E.register("canary-delay") ->
+		E2E.assertTrue("boots", true)
+		doAfter(20.) ->
+			E2E.finish()
+
+	E2E.bootstrap("canary")
+	if E2E.isActive()
+		print("E2E canary armed")
