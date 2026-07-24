@@ -32,7 +32,7 @@ function argumentValue(name, fallback = null) {
 }
 
 function latestBuiltMap() {
-  const buildDir = path.join(REPO_ROOT, "_build");
+  const buildDir = path.join(REPO_ROOT, "canary", "_build");
   if (!fs.existsSync(buildDir)) return null;
   const maps = fs.readdirSync(buildDir)
     .filter((name) => /\.w3x$/i.test(name))

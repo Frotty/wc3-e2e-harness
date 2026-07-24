@@ -1,0 +1,11 @@
+---
+projectName: wc3-e2e-canary
+dependencies:
+- https://github.com/wurstscript/wurstStdlib2
+- https://github.com/Frotty/wc3-e2e-harness
+buildMapData:
+  name: wc3-e2e-canary
+  fileName: wc3-e2e-canary.w3x
+  author: Frotty
+scriptMode: LUA
+wc3Patch: v2.0

@@ -8,11 +8,10 @@ on:
   pull_request:
 
 jobs:
-  grill:
+  runtime-tests:
     runs-on: ubuntu-latest
     container:
       image: frotty/wurstscript
-
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -20,5 +19,21 @@ jobs:
       - name: Install project dependencies
         run: grill install
 
-      - name: Build map
+      - name: Run protocol unit tests
+        run: grill test
+
+  canary-map:
+    runs-on: ubuntu-latest
+    container:
+      image: frotty/wurstscript
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install canary dependencies (pulls this repo from GitHub)
+        working-directory: canary
+        run: grill install
+
+      - name: Build canary map
+        working-directory: canary
         run: grill build ExampleMap.w3x

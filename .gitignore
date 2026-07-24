@@ -3,3 +3,4 @@ wurst.dependencies
 /.vscode
 war3map.j
 /artifacts
+/canary/_build
