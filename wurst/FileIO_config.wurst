@@ -1,0 +1,7 @@
+package FileIO_config
+
+/* THROWAWAY (Phase 0 transport spike): pins the stdlib FileIO carrier ability to a
+   fixed rawcode so the Node spike writer can address it. The real harness never
+   ships a FileIO_config — consuming projects own that override (Zombie Defense
+   already uses 'AM04'). Delete together with TransportSpike at the end of Phase 0. */
+@config public constant FILE_IO_ABIL_ID = 'E2EF'

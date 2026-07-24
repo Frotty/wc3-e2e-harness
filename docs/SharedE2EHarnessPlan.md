@@ -236,11 +236,12 @@ in both directions:
 - The map reads a file by executing it (`Preloader`) and collecting tooltip levels until the `" "`
   terminator; it writes through `PreloadGenClear`/`Preload`/`PreloadGenEnd`. Paths are relative to
   `CustomMapData`.
-- Node implements exactly one reader and one writer for this format. The writer output is
-  byte-compatible with what stdlib `File.write` produces, so the launch file Node generates is read
-  by plain stdlib `readAsString()` with no special map-side code. Shared test vectors (same
-  fixture files asserted in the Node tests and in a Wurst unit test) keep the two implementations
-  in lockstep.
+- Node implements exactly one reader and one writer for this format. The reader parses exactly
+  what stdlib `File.write` produces (breakout wrapper included). The writer emits minimal clean
+  JASS — a `PreloadFiles` function of `BlzSetAbilityTooltip` calls — which stdlib `readAsString()`
+  consumes without special map-side code (spike-verified; byte-mimicry of `PreloadGenEnd` output
+  is unnecessary). Shared test vectors (same fixture files asserted in the Node tests and in a
+  Wurst unit test) keep the two implementations in lockstep.
 - `FILE_IO_ABIL_ID` is a stdlib `@configurable`; Zombie Defense already overrides it to `AM04`.
   The project manifest carries the same rawcode so Node can embed it in generated files — a
   mismatch between manifest and map config means the launch file reads back empty, which surfaces
