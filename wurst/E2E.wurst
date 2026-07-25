@@ -27,7 +27,11 @@ public constant E2E_PROTOCOL_VERSION = 1
 
 constant HEARTBEAT_INTERVAL = 2.0
 constant MAX_FAILED_IDS = 8
-constant MAX_EVENT_KINDS = 16
+// A failing suite has to be able to report WHY it failed. At 16, a suite running several scenarios (or
+// recording a reasoning trace) silently lost everything after the first one: the result looked complete
+// while the diagnosis was missing. Truncation is counted too now, so it can never be invisible again.
+constant MAX_EVENT_KINDS = 128
+constant MAX_METRICS = 128
 
 public interface E2ESuiteBody
 	function run()
@@ -47,9 +51,22 @@ class EventCounter
 	construct(string id)
 		this.id = id
 
+/** A named measurement. Distinct from an event counter: an event asks "did this happen, how often", a
+    metric asks "what was the value". Encoding a value into an event NAME instead ("hp-lost-1350") mints a
+    brand-new event kind for every distinct value, which burns the kind budget and makes runs
+    incomparable — the name itself changes when the number does. */
+class Metric
+	string id
+	real value
+
+	construct(string id, real value)
+		this.id = id
+		this.value = value
+
 public class E2E
 	private static constant registrations = new LinkedList<Registration>()
 	private static constant events = new LinkedList<EventCounter>()
+	private static constant metrics = new LinkedList<Metric>()
 	private static var active = false
 	private static var finished = false
 	private static var heartbeatsStopped = false
@@ -61,6 +78,8 @@ public class E2E
 	private static var seq = 0
 	private static var heartbeatCount = 0
 	private static var gameSeconds = 0.
+	private static var eventKindsDropped = 0
+	private static var metricsDropped = 0
 	private static var assertsPassed = 0
 	private static var assertsFailed = 0
 	private static var failedIds = ""
@@ -120,6 +139,28 @@ public class E2E
 				return
 		if events.size() < MAX_EVENT_KINDS
 			events.add(new EventCounter(id))
+		else
+			// Never drop silently: a truncated event set previously looked identical to a complete one.
+			eventKindsDropped++
+
+	/** Records a named measurement, last write wins.
+
+		Use this instead of baking a number into an event id. A metric keeps one stable name across runs, so
+		results can be compared run to run, and it costs one slot no matter how much the value moves. */
+	static function recordMetric(string id, real value)
+		if not active or finished
+			return
+		for metric in metrics
+			if metric.id == id
+				metric.value = value
+				return
+		if metrics.size() < MAX_METRICS
+			metrics.add(new Metric(id, value))
+		else
+			metricsDropped++
+
+	static function recordMetric(string id, int value)
+		recordMetric(id, value.toReal())
 
 	static function finish()
 		if not active or finished
@@ -159,9 +200,18 @@ public class E2E
 			eventsJson += (first ? "" : ",") + q(counter.id) + ":" + I2S(counter.count)
 			first = false
 		eventsJson += "}"
+		var metricsJson = "{"
+		var firstMetric = true
+		for metric in metrics
+			metricsJson += (firstMetric ? "" : ",") + q(metric.id) + ":" + R2S(metric.value)
+			firstMetric = false
+		metricsJson += "}"
 		return "{" + q("asserts") + ":" + I2S(assertsPassed + assertsFailed)
 			+ "," + q("failed") + ":" + I2S(assertsFailed)
 			+ "," + q("failedIds") + ":" + q(failedIds)
+			+ "," + q("eventKindsDropped") + ":" + I2S(eventKindsDropped)
+			+ "," + q("metricsDropped") + ":" + I2S(metricsDropped)
+			+ "," + q("metrics") + ":" + metricsJson
 			+ "," + q("events") + ":" + eventsJson + "}"
 
 	private static function emit(string state, string payloadJson)
