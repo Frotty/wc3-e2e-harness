@@ -59,10 +59,6 @@ async function runSuite(options) {
   const customMapData = options.customMapData ?? findCustomMapData();
   if (!customMapData) throw new RunFailure("CustomMapData directory could not be resolved");
   if (!fs.existsSync(mapPath)) throw new RunFailure(`Map not found: ${mapPath}`);
-  if (win32.listWc3Pids().size > 0) {
-    throw new RunFailure("Refusing to run while Warcraft III is already running");
-  }
-
   const runId = `${suiteId}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   const nonce = crypto.randomBytes(6).toString("hex");
   const buildId = sha1File(mapPath).slice(0, 10);
@@ -86,6 +82,8 @@ async function runSuite(options) {
   const reader = createChannelReader(abilityId, identity);
   const seen = { ready: false, running: false, heartbeat: -1, terminalPayload: null };
   let pid;
+  let existingWc3Pids = new Set();
+  let launchSnapshotTaken = false;
   let shutdown = "none";
 
   const readOrNull = (file) => {
@@ -168,14 +166,15 @@ async function runSuite(options) {
     }
     artifacts.writeRun({ identity, map: mapPath, loadFile, wgcSpeed, suiteTimeoutMs });
     log(`Launching ${suiteId} (speed ${wgcSpeed > 0 ? `${wgcSpeed}x` : "1x"})...`);
-    const existing = win32.listWc3Pids();
+    existingWc3Pids = win32.listWc3Pids();
+    launchSnapshotTaken = true;
     spawn("cmd.exe", ["/d", "/s", "/c", "start", "", wc3Exe, ...launchArgs], {
       stdio: "ignore",
       detached: true,
       shell: false,
       cwd: wgcSpeed > 0 ? wc3Root : undefined,
     }).unref();
-    pid = await win32.waitForNewWc3Pid(existing);
+    pid = await win32.waitForNewWc3Pid(existingWc3Pids);
     if (!pid) throw new RunFailure("wc3-process-did-not-appear");
     log(`  pid ${pid}`);
 
@@ -245,14 +244,14 @@ async function runSuite(options) {
       shutdown = "left-open";
     } else {
       shutdown = win32.isProcessRunning(pid) ? "forced" : "clean";
-      await win32.killAllWc3(); // stragglers from the -launch re-exec block the next run
+      await win32.killWc3PidsExcept(existingWc3Pids);
     }
   } catch (error) {
     const reason = error instanceof RunFailure ? error.message : `unexpected: ${error.message}`;
     if (pid && win32.isProcessRunning(pid)) {
       await win32.screenshot(pid, path.join(artifacts.dir, "failure.png"));
     }
-    if (!keepOpen) await win32.killAllWc3();
+    if (!keepOpen && launchSnapshotTaken) await win32.killWc3PidsExcept(existingWc3Pids);
     shutdown = "failed";
     const result = artifacts.writeResult({ ...summary(machine, seen, shutdown), failure: reason });
     win32.agent.shutdown();
