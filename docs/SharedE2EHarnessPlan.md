@@ -49,8 +49,8 @@ The harness targets exactly this environment; anything outside it is out of scop
   visible window, so headless CI runners cannot execute native suites.
 - A retail Warcraft III Reforged install, auto-detected from the standard install paths or supplied
   via configuration.
-- Exactly one Warcraft III instance. The runner refuses to start while any Warcraft III process
-  exists and never attaches to a pre-existing one.
+- The runner may launch while Warcraft III is already running. It snapshots the existing process
+  IDs, controls the new process it discovers, and preserves pre-existing sessions during cleanup.
 - Node.js LTS for the runner and the OCR sidecar (tesseract.js plus the English traineddata).
   ImageMagick is optional preprocessing; when unavailable the sidecar falls back to raw frames with
   a single warning.
@@ -130,7 +130,7 @@ Every state has:
 
 Before Warcraft III starts, Node:
 
-- refuses to run while any Warcraft III process already exists;
+- snapshots the Warcraft III process IDs already present; this is the ownership boundary for cleanup;
 - creates a unique run id and random nonce;
 - removes or invalidates stale launch/output files for that run location;
 - writes the one-shot `ARMED` launch file containing project id, build id, protocol version, suite
@@ -372,8 +372,8 @@ The clean quit sequence is bounded and starts as soon as terminal evidence is kn
 - send Alt+F4 — with replays out of the result path there is nothing to preserve, so no menu
   navigation (the old F10/End-Game route existed only to make `LastReplay.w3g` flush);
 - confirm process exit;
-- force-terminate every remaining Warcraft III process (the `-launch` flow can leave a second pid
-  that would block the next run) — only after result artifacts are durable.
+- force-terminate only Warcraft III processes not present in the launch snapshot; the `-launch` flow
+  can leave a second pid that needs cleanup, and pre-existing sessions remain untouched.
 
 If clean quit exceeds its budget, the runner may terminate the process only after result artifacts are
 durable. The result records whether shutdown was clean or forced.

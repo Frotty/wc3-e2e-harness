@@ -190,6 +190,24 @@ async function killAllWc3(timeoutMs = 10_000) {
   return listWc3Pids().size === 0;
 }
 
+// Kill only Warcraft III processes that were not present when the harness
+// launched its run. This preserves a user's existing game session while also
+// cleaning up the launcher/re-exec processes created by -launch.
+async function killWc3PidsExcept(preservePids, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const ownedPids = pidsNotIn(listWc3Pids(), preservePids);
+    if (ownedPids.length === 0) return true;
+    for (const pid of ownedPids) killProcess(pid);
+    await sleep(500);
+  }
+  return [...listWc3Pids()].every((pid) => preservePids.has(pid));
+}
+
+function pidsNotIn(pids, preservePids) {
+  return [...pids].filter((pid) => !preservePids.has(pid));
+}
+
 async function foreground(pid) {
   try {
     return (await agent.request(["fg", pid])) === "1";
@@ -219,4 +237,6 @@ module.exports = {
   foreground,
   screenshot,
   killAllWc3,
+  killWc3PidsExcept,
+  pidsNotIn,
 };
