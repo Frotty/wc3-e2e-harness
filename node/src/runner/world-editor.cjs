@@ -44,7 +44,10 @@ async function runWorldEditorMap(options) {
   }
 
   const discoveredWc3Exe = wc3Exe || findWc3Exe();
-  const editorExe = requestedEditorExe || findWorldEditorExe({ wc3Exe: discoveredWc3Exe });
+  const requestedOrDiscoveredEditorExe = requestedEditorExe || findWorldEditorExe({ wc3Exe: discoveredWc3Exe });
+  const editorExe = requestedOrDiscoveredEditorExe
+    ? path.resolve(requestedOrDiscoveredEditorExe)
+    : null;
   if (launchMode === "direct" && !editorExe) {
     throw new WorldEditorRunFailure("World Editor executable not found");
   }
