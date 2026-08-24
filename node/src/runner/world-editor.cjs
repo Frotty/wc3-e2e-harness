@@ -35,7 +35,9 @@ async function runWorldEditorMap(options) {
     log = console.log,
   } = options;
 
-  if (!mapPath || !fs.existsSync(mapPath)) throw new WorldEditorRunFailure(`Map not found: ${mapPath}`);
+  if (!mapPath) throw new WorldEditorRunFailure("Map path is required");
+  const resolvedMapPath = path.resolve(mapPath);
+  if (!fs.existsSync(resolvedMapPath)) throw new WorldEditorRunFailure(`Map not found: ${resolvedMapPath}`);
   if (!artifactRoot) throw new WorldEditorRunFailure("artifactRoot is required");
   if (!['association', 'direct'].includes(launchMode)) {
     throw new WorldEditorRunFailure(`Unknown World Editor launch mode: ${launchMode}`);
@@ -47,7 +49,7 @@ async function runWorldEditorMap(options) {
     throw new WorldEditorRunFailure("World Editor executable not found");
   }
 
-  const mapName = path.basename(mapPath, path.extname(mapPath));
+  const mapName = path.basename(resolvedMapPath, path.extname(resolvedMapPath));
   const runId = `world-editor-${mapName}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   const artifacts = createArtifactWriter({ dir: path.join(artifactRoot, runId) });
   const existingPids = win32.listWorldEditorPids();
@@ -64,7 +66,7 @@ async function runWorldEditorMap(options) {
 
   artifacts.writeRun({
     mode: "world-editor",
-    map: mapPath,
+    map: resolvedMapPath,
     editorExe,
     launchMode,
     timeoutMs,
@@ -72,8 +74,8 @@ async function runWorldEditorMap(options) {
 
   const launch = () => {
     const child = launchMode === "association"
-      ? spawn("explorer.exe", [mapPath], { stdio: "ignore", detached: true, shell: false })
-      : spawn(editorExe, [mapPath], {
+      ? spawn("explorer.exe", [resolvedMapPath], { stdio: "ignore", detached: true, shell: false })
+      : spawn(editorExe, [resolvedMapPath], {
         stdio: "ignore",
         detached: true,
         shell: false,
@@ -122,7 +124,7 @@ async function runWorldEditorMap(options) {
 
   try {
     launch();
-    log(`Opening ${mapPath} in World Editor (${launchMode})...`);
+    log(`Opening ${resolvedMapPath} in World Editor (${launchMode})...`);
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       if (launchError) throw new WorldEditorRunFailure(`world-editor-launch-failed: ${launchError.message}`);
@@ -139,24 +141,32 @@ async function runWorldEditorMap(options) {
 
       if (screenProbe && Date.now() >= nextProbeAt) {
         nextProbeAt = Date.now() + screenProbeMs;
-        const probeId = ++probeCount;
-        const screenshotPath = path.join(artifacts.dir, "screens", `screen-${probeId}.png`);
-        const candidatePid = [...pids][0] ?? null;
-        const capturedPath = candidatePid === null ? null : await win32.screenshot(candidatePid, screenshotPath);
-        const screen = await screenProbe({
-          pid: candidatePid,
-          phase: "WORLD_EDITOR_LOADING",
-          screenshotPath: capturedPath,
-          artifactDir: artifacts.dir,
-        });
-        artifacts.appendTimeline({ at: Date.now(), event: "screen-probe", result: screen ?? "unknown" });
-        const candidateTitle = candidatePid === null ? null : await win32.windowTitle(candidatePid);
-        if (screen === "loaded" && hasPostLaunchEvidence(candidatePid, candidateTitle)) {
-          loadedPid = candidatePid;
-          loadedTitle = candidateTitle;
-          break;
+        for (const candidatePid of orderEditorProbePids(pids, existingPids)) {
+          const probeId = ++probeCount;
+          const screenshotPath = path.join(artifacts.dir, "screens", `screen-${probeId}.png`);
+          const capturedPath = await win32.screenshot(candidatePid, screenshotPath);
+          const screen = await screenProbe({
+            pid: candidatePid,
+            phase: "WORLD_EDITOR_LOADING",
+            screenshotPath: capturedPath,
+            artifactDir: artifacts.dir,
+          });
+          artifacts.appendTimeline({
+            at: Date.now(),
+            event: "screen-probe",
+            pid: candidatePid,
+            result: screen ?? "unknown",
+          });
+          const candidateTitle = await win32.windowTitle(candidatePid);
+          const fresh = hasPostLaunchEvidence(candidatePid, candidateTitle);
+          if (screen === "loaded" && fresh) {
+            loadedPid = candidatePid;
+            loadedTitle = candidateTitle;
+            break;
+          }
+          if (screen === "error" && fresh) throw new WorldEditorRunFailure("world-editor-map-load-error");
         }
-        if (screen === "error") throw new WorldEditorRunFailure("world-editor-map-load-error");
+        if (loadedPid !== null) break;
       }
 
       if (sawEditorProcess && pids.size === 0 && launchMode === "direct") {
@@ -173,7 +183,7 @@ async function runWorldEditorMap(options) {
       loaded: true,
       pid: loadedPid,
       windowTitle: loadedTitle,
-      map: mapPath,
+      map: resolvedMapPath,
     });
   } catch (error) {
     const reason = error instanceof WorldEditorRunFailure ? error.message : `unexpected: ${error.message}`;
@@ -206,9 +216,14 @@ function editorEvidenceIsFresh(pid, title, existingPids, initialTitles) {
   return initialTitles.has(pid) && initialTitles.get(pid) !== title;
 }
 
+function orderEditorProbePids(pids, existingPids) {
+  return [...pids].sort((left, right) => Number(existingPids.has(left)) - Number(existingPids.has(right)));
+}
+
 module.exports = {
   runWorldEditorMap,
   WorldEditorRunFailure,
   mapTitleMatches,
   editorEvidenceIsFresh,
+  orderEditorProbePids,
 };

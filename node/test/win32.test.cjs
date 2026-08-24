@@ -4,7 +4,11 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 
 const { parseTasklistPids, pidsNotIn } = require("../src/runner/win32.cjs");
-const { editorEvidenceIsFresh, mapTitleMatches } = require("../src/runner/world-editor.cjs");
+const {
+  editorEvidenceIsFresh,
+  mapTitleMatches,
+  orderEditorProbePids,
+} = require("../src/runner/world-editor.cjs");
 
 test("PID ownership preserves processes present before the run", () => {
   assert.deepEqual(pidsNotIn(new Set([101, 202, 303]), new Set([101, 303])), [202]);
@@ -29,4 +33,11 @@ test("World Editor readiness requires fresh evidence for existing processes", ()
   assert.equal(editorEvidenceIsFresh(202, "World Editor - ExampleMap", existingPids, initialTitles), true);
   assert.equal(editorEvidenceIsFresh(101, "World Editor", existingPids, initialTitles), false);
   assert.equal(editorEvidenceIsFresh(101, "World Editor - ExampleMap", existingPids, initialTitles), true);
+});
+
+test("World Editor screen probes prefer every newly launched process", () => {
+  assert.deepEqual(
+    orderEditorProbePids(new Set([101, 202, 303]), new Set([101])),
+    [202, 303, 101],
+  );
 });
