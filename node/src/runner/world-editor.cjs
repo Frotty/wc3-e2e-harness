@@ -51,6 +51,8 @@ async function runWorldEditorMap(options) {
   const runId = `world-editor-${mapName}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   const artifacts = createArtifactWriter({ dir: path.join(artifactRoot, runId) });
   const existingPids = win32.listWorldEditorPids();
+  const initialTitles = new Map();
+  for (const pid of existingPids) initialTitles.set(pid, await win32.windowTitle(pid));
   let launched = false;
   let launchError = null;
   let loadedPid = null;
@@ -85,6 +87,8 @@ async function runWorldEditorMap(options) {
   };
 
   const titleHasMap = (title) => mapTitleMatches(title, mapName);
+  const hasPostLaunchEvidence = (pid, title) =>
+    editorEvidenceIsFresh(pid, title, existingPids, initialTitles);
   const currentPids = () => {
     const pids = win32.listWorldEditorPids();
     if (pids.size > 0) sawEditorProcess = true;
@@ -125,7 +129,7 @@ async function runWorldEditorMap(options) {
       const pids = currentPids();
       for (const pid of pids) {
         const title = await win32.windowTitle(pid);
-        if (titleHasMap(title)) {
+        if (titleHasMap(title) && hasPostLaunchEvidence(pid, title)) {
           loadedPid = pid;
           loadedTitle = title;
           break;
@@ -146,9 +150,10 @@ async function runWorldEditorMap(options) {
           artifactDir: artifacts.dir,
         });
         artifacts.appendTimeline({ at: Date.now(), event: "screen-probe", result: screen ?? "unknown" });
-        if (screen === "loaded") {
+        const candidateTitle = candidatePid === null ? null : await win32.windowTitle(candidatePid);
+        if (screen === "loaded" && hasPostLaunchEvidence(candidatePid, candidateTitle)) {
           loadedPid = candidatePid;
-          loadedTitle = candidatePid === null ? null : await win32.windowTitle(candidatePid);
+          loadedTitle = candidateTitle;
           break;
         }
         if (screen === "error") throw new WorldEditorRunFailure("world-editor-map-load-error");
@@ -195,4 +200,15 @@ function mapTitleMatches(title, mapName) {
   return typeof title === "string" && typeof mapName === "string" && title.toLocaleLowerCase().includes(mapName.toLocaleLowerCase());
 }
 
-module.exports = { runWorldEditorMap, WorldEditorRunFailure, mapTitleMatches };
+function editorEvidenceIsFresh(pid, title, existingPids, initialTitles) {
+  if (pid === null || pid === undefined) return false;
+  if (!existingPids.has(pid)) return true;
+  return initialTitles.has(pid) && initialTitles.get(pid) !== title;
+}
+
+module.exports = {
+  runWorldEditorMap,
+  WorldEditorRunFailure,
+  mapTitleMatches,
+  editorEvidenceIsFresh,
+};

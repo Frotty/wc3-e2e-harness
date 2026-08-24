@@ -47,3 +47,23 @@ test("modified file reader forgets a file while it is absent", () => {
   present = true;
   assert.equal(reader.read("out.pld"), "x");
 });
+
+test("modified file reader retries a failed read with unchanged metadata", () => {
+  let reads = 0;
+  const fakeFs = {
+    statSync() {
+      return { size: 1, mtimeMs: 1, ctimeMs: 1, birthtimeMs: 1 };
+    },
+    readFileSync() {
+      reads++;
+      if (reads === 1) throw new Error("writer still has the file open");
+      return "terminal";
+    },
+  };
+  const reader = createModifiedFileReader(fakeFs);
+
+  assert.equal(reader.read("out.pld"), null);
+  assert.equal(reader.read("out.pld"), "terminal");
+  assert.equal(reader.read("out.pld"), null);
+  assert.equal(reads, 2);
+});

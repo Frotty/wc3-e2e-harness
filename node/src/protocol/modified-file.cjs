@@ -23,13 +23,14 @@ function createModifiedFileReader(fsApi = fs) {
 
       const signature = [stat.size, stat.mtimeMs, stat.ctimeMs, stat.birthtimeMs].join(":");
       if (signature === previous) return null;
-      previous = signature;
 
       try {
-        return fsApi.readFileSync(filePath, "utf8");
+        const content = fsApi.readFileSync(filePath, "utf8");
+        previous = signature;
+        return content;
       } catch {
         // A writer can replace/truncate a file between stat and read. The
-        // next poll will retry after the file identity changes again.
+        // next poll must retry even if the metadata remains unchanged.
         return null;
       }
     },
