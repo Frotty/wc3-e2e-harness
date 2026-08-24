@@ -119,6 +119,10 @@ async function runSuite(options) {
       } else if (snap.state === "RUNNING") {
         if (!seen.running) log(`  RUNNING (seq ${snap.seq})`);
         seen.running = true;
+        // E2E.startSuite() emits RUNNING immediately after LOADED. Treat it
+        // as load evidence when the alternating channel overwrote LOADED
+        // before the watcher could observe that intermediate snapshot.
+        if (mapLoadOnly && loadedAt === null) loadedAt = Date.now();
         seen.heartbeat = Math.max(seen.heartbeat, snap.heartbeat);
         machine.noteHeartbeat(snap.heartbeat);
       } else {
@@ -214,13 +218,11 @@ async function runSuite(options) {
     }
 
     // --- Loading: READY proves the map armed behind the loading screen ------
-    // mapLoadOnly continues through LOADED so READY cannot produce a false
-    // positive while the map is still loading. RUNNING/terminal also exit when
-    // an intermediate snapshot was overwritten.
+    // LOADED is emitted by a game-time timer, so mapLoadOnly must still reach
+    // the unpause phase after READY in order to let that timer advance.
     if (!machine.verdict) {
       machine.enter("LOADING");
       while (!loadingComplete({
-        mapLoadOnly,
         ready: seen.ready,
         loaded: seen.loaded,
         running: seen.running,
@@ -230,22 +232,23 @@ async function runSuite(options) {
       }
     }
 
-    if (mapLoadOnly && seen.loaded && loadedAt !== null && !machine.verdict) {
-      const settleUntil = loadedAt + mapLoadSettleMs;
-      while (Date.now() < settleUntil && !machine.verdict) await step();
-      if (!machine.verdict) {
-        machine.noteTerminal("PASS");
-        seen.terminalPayload = { mapLoaded: true };
-      }
-    }
-
     // --- Unpause: Space + mandatory F10 cycle until the game clock advances -
-    if (!machine.verdict && !seen.running) {
+    if (!machine.verdict && !unpauseComplete({
+      mapLoadOnly,
+      loaded: seen.loaded,
+      running: seen.running,
+      verdict: machine.verdict,
+    })) {
       machine.enter("UNPAUSE");
       let lastSpaceAt = 0;
       let lastF10At = 0;
       let spaceCount = 0;
-      while (!seen.running && !machine.verdict) {
+      while (!unpauseComplete({
+        mapLoadOnly,
+        loaded: seen.loaded,
+        running: seen.running,
+        verdict: machine.verdict,
+      })) {
         const now = Date.now();
         if (now - lastSpaceAt >= SPACE_RETRY_MS) {
           lastSpaceAt = now;
@@ -261,6 +264,15 @@ async function runSuite(options) {
           await f10Cycle();
         }
         await step();
+      }
+    }
+
+    if (mapLoadOnly && loadedAt !== null && !machine.verdict) {
+      const settleUntil = loadedAt + mapLoadSettleMs;
+      while (Date.now() < settleUntil && !machine.verdict) await step();
+      if (!machine.verdict) {
+        machine.noteTerminal("PASS");
+        seen.terminalPayload = { mapLoaded: true };
       }
     }
 
@@ -322,8 +334,12 @@ function summary(machine, seen, shutdown) {
   };
 }
 
-function loadingComplete({ mapLoadOnly, ready, loaded, running, verdict }) {
-  return Boolean(verdict) || loaded || running || (!mapLoadOnly && ready);
+function loadingComplete({ ready, loaded, running, verdict }) {
+  return Boolean(verdict) || ready || loaded || running;
 }
 
-module.exports = { runSuite, RunFailure, loadingComplete };
+function unpauseComplete({ mapLoadOnly, loaded, running, verdict }) {
+  return Boolean(verdict) || running || (mapLoadOnly && loaded);
+}
+
+module.exports = { runSuite, RunFailure, loadingComplete, unpauseComplete };
