@@ -57,7 +57,10 @@ async function runWorldEditorMap(options) {
   const artifacts = createArtifactWriter({ dir: path.join(artifactRoot, runId) });
   const existingPids = win32.listWorldEditorPids();
   const initialTitles = new Map();
-  for (const pid of existingPids) initialTitles.set(pid, await win32.windowTitle(pid));
+  for (const pid of existingPids) {
+    const title = await win32.windowTitle(pid);
+    if (title !== null) initialTitles.set(pid, title);
+  }
   let launched = false;
   let launchError = null;
   let loadedPid = null;
@@ -216,7 +219,7 @@ function mapTitleMatches(title, mapName) {
 function editorEvidenceIsFresh(pid, title, existingPids, initialTitles) {
   if (pid === null || pid === undefined) return false;
   if (!existingPids.has(pid)) return true;
-  return initialTitles.has(pid) && initialTitles.get(pid) !== title;
+  return typeof title === "string" && initialTitles.has(pid) && initialTitles.get(pid) !== title;
 }
 
 function orderEditorProbePids(pids, existingPids) {

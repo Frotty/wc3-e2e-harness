@@ -33,6 +33,8 @@ test("World Editor readiness requires fresh evidence for existing processes", ()
   assert.equal(editorEvidenceIsFresh(202, "World Editor - ExampleMap", existingPids, initialTitles), true);
   assert.equal(editorEvidenceIsFresh(101, "World Editor", existingPids, initialTitles), false);
   assert.equal(editorEvidenceIsFresh(101, "World Editor - ExampleMap", existingPids, initialTitles), true);
+  assert.equal(editorEvidenceIsFresh(101, null, existingPids, initialTitles), false);
+  assert.equal(editorEvidenceIsFresh(101, "World Editor - ExampleMap", existingPids, new Map()), false);
 });
 
 test("World Editor screen probes prefer every newly launched process", () => {

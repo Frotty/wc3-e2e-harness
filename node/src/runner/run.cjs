@@ -278,6 +278,7 @@ async function runSuite(options) {
     }
 
     if (mapLoadOnly && loadedAt !== null && !machine.verdict) {
+      enterMapLoadConfirmation(machine);
       const settleUntil = loadedAt + mapLoadSettleMs;
       while (Date.now() < settleUntil && !machine.verdict) await step();
       if (!machine.verdict) {
@@ -354,4 +355,17 @@ function unpauseComplete({ mapLoadOnly, loaded, running, verdict }) {
   return Boolean(verdict) || running || (mapLoadOnly && loaded);
 }
 
-module.exports = { runSuite, RunFailure, loadingComplete, unpauseComplete };
+function enterMapLoadConfirmation(machine) {
+  if (machine.state === "LOADING" || machine.state === "UNPAUSE") {
+    machine.enter("READY");
+    machine.noteReady();
+  }
+}
+
+module.exports = {
+  runSuite,
+  RunFailure,
+  loadingComplete,
+  unpauseComplete,
+  enterMapLoadConfirmation,
+};
