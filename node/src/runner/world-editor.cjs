@@ -201,7 +201,7 @@ async function runWorldEditorMap(options) {
       loaded: false,
       pid: loadedPid,
       windowTitle: loadedTitle,
-      map: mapPath,
+      map: resolvedMapPath,
       shutdown,
     });
     win32.agent.shutdown();

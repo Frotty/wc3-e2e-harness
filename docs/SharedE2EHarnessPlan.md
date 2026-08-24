@@ -181,11 +181,13 @@ The F10 open/close sequence is mandatory for every suite, not a retry used only 
 If the sequence is inconclusive, the runner repeats the bounded focus recovery sequence. It never
 uses coordinate-based clicks.
 
-For a map-load-only probe, the runner can stop after matching `READY`/`LOADED`, wait a one-second
-wall-clock settle interval, and enter the normal quit path without requiring a suite heartbeat.
-Consumers may also provide a screen probe during `LOADING`/`UNPAUSE`; returning `main-menu` fails the
-run as `main-menu-before-map-load` immediately and stores the classifier screenshot. Without a visual
-probe, the preload channel cannot distinguish a rendered main menu from another map-load failure.
+For a map-load-only probe, the runner waits for `READY`, drives the same Space/F10 unpause path, and
+stops after `LOADED` (or the immediately following `RUNNING` snapshot when the alternating output
+channel skips the intermediate frame). It then waits a one-second wall-clock settle interval and enters
+the normal quit path without requiring a suite heartbeat. Consumers may also provide a screen probe
+during `LOADING`/`UNPAUSE`; returning `main-menu` fails the run as `main-menu-before-map-load`
+immediately and stores the classifier screenshot. Without a visual probe, the preload channel cannot
+distinguish a rendered main menu from another map-load failure.
 
 ### 4. Suite auto-start
 

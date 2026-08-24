@@ -75,13 +75,22 @@ async function runSuite(options) {
 
   const channelDir = path.join(customMapData, "wc3-e2e", projectId);
   const outputs = [path.join(channelDir, "output-a.pld"), path.join(channelDir, "output-b.pld")];
+  const armedPath = path.join(channelDir, "armed.pld");
   for (const stale of outputs) {
     if (fs.existsSync(stale)) fs.unlinkSync(stale);
   }
   const armedBody =
     `armed;v=${identity.v};projectId=${projectId};buildId=${buildId};runId=${runId};nonce=${nonce};suiteId=${suiteId}`;
+  const armedText = encodeFileText(abilityId, encodeFrame(armedBody));
   fs.mkdirSync(channelDir, { recursive: true });
-  fs.writeFileSync(path.join(channelDir, "armed.pld"), encodeFileText(abilityId, encodeFrame(armedBody)), "utf8");
+  fs.writeFileSync(armedPath, armedText, "utf8");
+  const removeOwnedArmedFile = () => {
+    try {
+      if (fs.existsSync(armedPath) && fs.readFileSync(armedPath, "utf8") === armedText) fs.unlinkSync(armedPath);
+    } catch {
+      // Cleanup is best-effort; never hide the actual run result.
+    }
+  };
 
   const machine = createLifecycle({
     clock: createRealClock(),
@@ -107,6 +116,7 @@ async function runSuite(options) {
     }
     const polled = reader.poll(outputs.map((file, index) => outputReaders[index].read(file)));
     if (polled.accepted) {
+      removeOwnedArmedFile();
       const snap = polled.accepted;
       artifacts.appendTimeline({ at: Date.now(), seq: snap.seq, state: snap.state, heartbeat: snap.heartbeat });
       if (snap.state === "READY") {
@@ -310,6 +320,7 @@ async function runSuite(options) {
       await win32.screenshot(pid, path.join(artifacts.dir, "failure.png"));
     }
     if (!keepOpen && launchSnapshotTaken) await win32.killWc3PidsExcept(existingWc3Pids);
+    removeOwnedArmedFile();
     shutdown = "failed";
     const result = artifacts.writeResult({ ...summary(machine, seen, shutdown), failure: reason });
     win32.agent.shutdown();
@@ -317,6 +328,7 @@ async function runSuite(options) {
   }
 
   const result = artifacts.writeResult(summary(machine, seen, shutdown));
+  removeOwnedArmedFile();
   win32.agent.shutdown();
   return { ...result, exitCode: result.verdict === "PASS" ? 0 : 1, artifactDir: artifacts.dir };
 }

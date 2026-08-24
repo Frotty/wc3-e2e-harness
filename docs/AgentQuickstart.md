@@ -51,9 +51,11 @@ const result = await runSuite({
 if (result.exitCode !== 0) process.exitCode = result.exitCode;
 ```
 
-For a “does Warcraft III load this map?” probe, use `mapLoadOnly: true`. The runner treats a matching
-`READY`/`LOADED` signal as success, waits one wall-clock second for initialization to settle, and starts
-the normal bounded quit path. This avoids needing a fake long-running suite.
+For a “does Warcraft III load this map?” probe, use `mapLoadOnly: true`. The runner waits for `READY`,
+drives the same Space/F10 unpause path as a normal suite, then requires `LOADED` (or the immediately
+following `RUNNING` snapshot when the alternating output channel skips the intermediate frame) before
+waiting one wall-clock second and starting the normal bounded quit path. This avoids both false success
+while the map is still loading and deadlocking before the game-time load timer can fire.
 
 ## Fast main-menu failure detection
 
