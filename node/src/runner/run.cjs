@@ -112,7 +112,6 @@ async function runSuite(options) {
       if (snap.state === "READY") {
         seen.ready = true;
         log(`  READY (seq ${snap.seq})`);
-        if (mapLoadOnly && loadedAt === null) loadedAt = Date.now();
       } else if (snap.state === "LOADED") {
         seen.loaded = true;
         loadedAt ??= Date.now();
@@ -215,15 +214,23 @@ async function runSuite(options) {
     }
 
     // --- Loading: READY proves the map armed behind the loading screen ------
-    // (seen.running also exits: READY can be missed when A/B were overwritten)
+    // mapLoadOnly continues through LOADED so READY cannot produce a false
+    // positive while the map is still loading. RUNNING/terminal also exit when
+    // an intermediate snapshot was overwritten.
     if (!machine.verdict) {
       machine.enter("LOADING");
-      while (!seen.ready && !seen.loaded && !seen.running && !machine.verdict) {
+      while (!loadingComplete({
+        mapLoadOnly,
+        ready: seen.ready,
+        loaded: seen.loaded,
+        running: seen.running,
+        verdict: machine.verdict,
+      })) {
         await step();
       }
     }
 
-    if (mapLoadOnly && loadedAt !== null && !machine.verdict) {
+    if (mapLoadOnly && seen.loaded && loadedAt !== null && !machine.verdict) {
       const settleUntil = loadedAt + mapLoadSettleMs;
       while (Date.now() < settleUntil && !machine.verdict) await step();
       if (!machine.verdict) {
@@ -315,4 +322,8 @@ function summary(machine, seen, shutdown) {
   };
 }
 
-module.exports = { runSuite, RunFailure };
+function loadingComplete({ mapLoadOnly, ready, loaded, running, verdict }) {
+  return Boolean(verdict) || loaded || running || (!mapLoadOnly && ready);
+}
+
+module.exports = { runSuite, RunFailure, loadingComplete };
