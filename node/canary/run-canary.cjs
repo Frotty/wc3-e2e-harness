@@ -23,6 +23,7 @@ const SUITE_TIMEOUTS_MS = {
   "canary-fail": 120_000,
   "canary-stall": 60_000,
   "canary-delay": 180_000,
+  "canary-empty": 120_000,
 };
 
 function argumentValue(name, fallback = null) {
@@ -44,6 +45,7 @@ function latestBuiltMap() {
 async function main() {
   const suite = argumentValue("suite", "canary-pass");
   const expected = suite === "canary-fail" ? "FAIL" : "PASS";
+  const expectEmpty = suite === "canary-empty";
   // canary-stall never finishes by design: the correct runner behavior is a
   // bounded heartbeat-stall failure, not a verdict.
   const expectStall = suite === "canary-stall";
@@ -79,6 +81,8 @@ async function main() {
     });
     const ok = expectStall
       ? result.verdict === null && result.failure === "heartbeat-stall-unrecovered"
+      : expectEmpty
+        ? result.verdict === "PASS"
       : result.verdict === expected && result.readyObserved && result.runningObserved && result.heartbeats >= 1;
     console.log(
       `verdict=${result.verdict ?? "none"} expected=${expectStall ? "stall-failure" : expected} ` +

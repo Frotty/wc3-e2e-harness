@@ -69,7 +69,7 @@ flowchart LR
     Agent --> WC3
     Control -->|"Preloader() read once at init"| Map["Map E2E runtime"]
     WC3 --> Map
-    Map -->|"READY, heartbeat, RESULT"| Output["Preload output A/B"]
+    Map -->|"READY, LOADED, heartbeat, RESULT"| Output["Preload output A/B"]
     Runner -->|"poll and validate"| Output
     Runner --> OCR["Persistent Node OCR sidecar"]
     Runner --> Artifacts["Compact run artifacts"]
@@ -78,6 +78,7 @@ flowchart LR
 ### Shared harness responsibilities
 
 - Build and launch configuration.
+- World Editor map-open probing through the Windows file association or a direct editor executable.
 - WGC file generation and the Warcraft III process lifecycle.
 - Win32 agent keyboard input and screenshot capture.
 - Window discovery, foreground checks, and focus recovery.
@@ -91,6 +92,10 @@ flowchart LR
 - Immediate terminal-state handling and bounded clean quit.
 - Compact console output and structured artifacts.
 - Reusable Wurst E2E runtime.
+
+The World Editor probe is intentionally separate from the WC3 preload protocol. It confirms the map by
+window title (map basename) or an optional screen classifier, preserves pre-existing editor processes,
+and cleans up only editor processes created by the probe.
 
 ### Project adapter responsibilities
 
@@ -115,8 +120,10 @@ PREPARE -> LAUNCH -> WINDOW -> LOADING -> UNPAUSE
 States are runner-side confirmations, not a strict wall-clock ordering of map events. The map emits
 `READY` during map initialization, which normally happens while the loading screen is still on
 screen — so the runner may observe the `READY` snapshot at any point after LAUNCH and simply records
-it. The READY state means "READY confirmed"; RUNNING means a valid `RUNNING` snapshot plus an
-advancing heartbeat have been observed, which is also the proof that the unpause sequence worked.
+it. After a one-game-second settle window, the map emits `LOADED`; this is a durable notification for
+map-load-only probes. The READY state means "READY confirmed"; RUNNING means a valid `RUNNING`
+snapshot plus an advancing heartbeat have been observed, which is also the proof that the unpause
+sequence worked.
 
 Every state has:
 
@@ -149,7 +156,8 @@ The map reads the launch file during its earliest initialization hook. A valid `
 - suppresses biome selection, seed selection, ordinary timers, and other normal startup;
 - loads the named suite without executing it;
 - emits `READY`;
-- schedules the suite to start on the first game-time tick.
+- emits `LOADED` after a one-game-second settle window;
+- starts the suite immediately after `LOADED`.
 
 Because normal startup is suppressed at initialization time — before any launch speed can matter —
 there is no window in which ordinary setup races ahead of E2E setup. This is the central protection
@@ -173,12 +181,20 @@ The F10 open/close sequence is mandatory for every suite, not a retry used only 
 If the sequence is inconclusive, the runner repeats the bounded focus recovery sequence. It never
 uses coordinate-based clicks.
 
+For a map-load-only probe, the runner waits for `READY`, drives the same Space/F10 unpause path, and
+stops after `LOADED` (or the immediately following `RUNNING` snapshot when the alternating output
+channel skips the intermediate frame). It then waits a one-second wall-clock settle interval and enters
+the normal quit path without requiring a suite heartbeat. Consumers may also provide a screen probe
+during `LOADING`/`UNPAUSE`; returning `main-menu` fails the run as `main-menu-before-map-load`
+immediately and stores the classifier screenshot. Without a visual probe, the preload channel cannot
+distinguish a rendered main menu from another map-load failure.
+
 ### 4. Suite auto-start
 
 On the first game-time tick after initialization — which by definition means the game is unpaused
 and simulating — the map:
 
-- emits `RUNNING` immediately;
+- emits `LOADED`, then `RUNNING` immediately;
 - starts the fixture;
 - emits periodic heartbeats while active.
 
@@ -303,6 +319,10 @@ A reader accepts a snapshot only when:
 - the checksum matches;
 - the state transition is legal.
 
+The runner polls the two output paths every 250 ms, but reads and parses a path only after its size or
+filesystem timestamps change. A complete terminal snapshot remains authoritative even when a fast
+suite overwrites intermediate `READY`/`LOADED`/`RUNNING` snapshots before the next poll.
+
 Of the two alternating files, the reader chooses the highest fully valid matching sequence. A
 truncated newer write cannot hide an older valid snapshot.
 
@@ -311,6 +331,7 @@ truncated newer write cannot hide an older valid snapshot.
 Flush immediately on:
 
 - `READY`;
+- `LOADED`;
 - `RUNNING`;
 - assertion failure;
 - phase transition;

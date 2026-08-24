@@ -84,13 +84,22 @@ test("illegal state transitions are rejected", () => {
   assert.equal(afterPass.accepted, null);
   assert.match(afterPass.rejected[0].reason, /illegal-transition-PASS->RUNNING/);
 
-  // READY cannot jump straight to PASS (RUNNING is always flushed first)
+  // A fast suite can overwrite RUNNING before the watcher reads it.
   const readyToPass = selectSnapshot(ABIL, [snap({ seq: 2, state: "PASS" })], {
     identity,
     lastSeq: 1,
     lastState: "READY",
   });
-  assert.equal(readyToPass.accepted, null);
+  assert.equal(readyToPass.accepted.state, "PASS");
+});
+
+test("an immediate terminal snapshot is valid when intermediate states were missed", () => {
+  const result = selectSnapshot(ABIL, [snap({ seq: 4, state: "PASS" })], {
+    identity,
+    lastSeq: -1,
+    lastState: null,
+  });
+  assert.equal(result.accepted.state, "PASS");
 });
 
 test("RUNNING is legal from null (missed READY) and channel reader tracks state", () => {
@@ -101,4 +110,20 @@ test("RUNNING is legal from null (missed READY) and channel reader tracks state"
   assert.equal(terminal.accepted.state, "PASS");
   const afterTerminal = reader.poll([snap({ seq: 4, state: "RUNNING" }), null]);
   assert.equal(afterTerminal.accepted, null);
+});
+
+test("LOADED is legal after READY and when READY was overwritten", () => {
+  const afterReady = selectSnapshot(ABIL, [snap({ seq: 2, state: "LOADED" })], {
+    identity,
+    lastSeq: 1,
+    lastState: "READY",
+  });
+  assert.equal(afterReady.accepted.state, "LOADED");
+
+  const lateLoaded = selectSnapshot(ABIL, [snap({ seq: 3, state: "LOADED" })], {
+    identity,
+    lastSeq: 2,
+    lastState: null,
+  });
+  assert.equal(lateLoaded.accepted.state, "LOADED");
 });

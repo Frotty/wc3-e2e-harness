@@ -31,8 +31,8 @@ import E2EProtocol
 	untranspose(encoded).assertEquals(original)
 
 @Test function keyValueParsing()
-	let body = "armed;v=1;projectId=canary;suiteId=canary-pass"
-	keyValue(body, "v").assertEquals("1")
+	let body = "armed;v=2;projectId=canary;suiteId=canary-pass"
+	keyValue(body, "v").assertEquals("2")
 	keyValue(body, "projectId").assertEquals("canary")
 	keyValue(body, "suiteId").assertEquals("canary-pass")
 	keyValue(body, "missing").assertEquals("")

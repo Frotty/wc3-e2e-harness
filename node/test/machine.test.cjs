@@ -127,3 +127,12 @@ test("lifecycle cannot move backwards", () => {
   machine.enter("WINDOW");
   assert.throws(() => machine.enter("LAUNCH"));
 });
+
+test("screen failures short-circuit the active phase", () => {
+  const { machine } = makeMachine();
+  machine.enter("LAUNCH");
+  machine.enter("WINDOW");
+  machine.enter("LOADING");
+  machine.noteFailure("main-menu-before-map-load");
+  assert.equal(machine.tick().failed, "main-menu-before-map-load");
+});

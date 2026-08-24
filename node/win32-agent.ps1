@@ -26,6 +26,7 @@ public static class W32 {
     [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
     [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder lpString, int nMaxCount);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
@@ -70,13 +71,20 @@ $keyTable = @{
 
 function FindWindowForPid([long]$targetPid) {
     $script:foundHwnd = [IntPtr]::Zero
+    $script:foundArea = -1L
     [void][W32]::EnumWindows({
         param([IntPtr]$hwnd, [IntPtr]$lparam)
         $windowPid = [UInt32]0
         [void][W32]::GetWindowThreadProcessId($hwnd, [ref]$windowPid)
         if ($windowPid -eq $targetPid -and [W32]::IsWindowVisible($hwnd)) {
-            $script:foundHwnd = $hwnd
-            return $false
+            $rect = New-Object W32+RECT
+            if ([W32]::GetWindowRect($hwnd, [ref]$rect)) {
+                $area = [int64]($rect.Right - $rect.Left) * [int64]($rect.Bottom - $rect.Top)
+                if ($area -gt $script:foundArea) {
+                    $script:foundArea = $area
+                    $script:foundHwnd = $hwnd
+                }
+            }
         }
         return $true
     }, [IntPtr]::Zero)
@@ -89,6 +97,14 @@ function DoForeground([long]$targetPid) {
     [void][W32]::ShowWindow($hwnd, 9)  # SW_RESTORE: un-minimize and activate
     [void][W32]::SetForegroundWindow($hwnd)
     return '1'
+}
+
+function DoTitle([long]$targetPid) {
+    $hwnd = FindWindowForPid $targetPid
+    if ($hwnd -eq [IntPtr]::Zero) { throw 'window not found' }
+    $title = New-Object System.Text.StringBuilder 512
+    [void][W32]::GetWindowText($hwnd, $title, $title.Capacity)
+    return [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($title.ToString()))
 }
 
 function DoKey([long]$targetPid, [string]$keyName, [bool]$alt) {
@@ -203,6 +219,7 @@ while ($true) {
         $data = switch ($cmd) {
             'ping' { 'pong' }
             'fg'   { DoForeground ([long]$parts[2]) }
+            'title' { DoTitle ([long]$parts[2]) }
             'key'  { DoKey ([long]$parts[2]) $parts[3] ($parts[4] -eq '1') }
             'text' { DoText ([long]$parts[2]) (DecodeB64 $parts[3]) }
             'shot' { DoShot ([long]$parts[2]) (DecodeB64 $parts[3]) }

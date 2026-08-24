@@ -9,7 +9,8 @@ import ClosureTimers
 	  canary-pass   READY -> RUNNING -> heartbeats -> PASS
 	  canary-fail   deliberate assertion failure -> FAIL
 	  canary-stall  heartbeats stop without a terminal result
-	  canary-delay  result only after a longer runtime
+	canary-delay  result only after a longer runtime
+	canary-empty  immediate terminal result for a no-op suite
 */
 
 init
@@ -36,6 +37,9 @@ init
 		E2E.assertTrue("boots", true)
 		doAfter(20.) ->
 			E2E.finish()
+
+	E2E.register("canary-empty") ->
+		E2E.finish()
 
 	E2E.bootstrap("canary")
 	if E2E.isActive()

@@ -26,6 +26,34 @@ function wc3RootFor(gameExe) {
   return exeDir;
 }
 
+function findWorldEditorExe({ wc3Exe = null, existsSync = fs.existsSync } = {}) {
+  const candidates = [];
+  if (wc3Exe) {
+    const exeDir = path.dirname(wc3Exe);
+    candidates.push(
+      path.join(exeDir, "World Editor.exe"),
+      path.join(exeDir, "WorldEditor.exe"),
+      path.join(path.dirname(exeDir), "World Editor.exe"),
+      path.join(path.dirname(exeDir), "WorldEditor.exe"),
+    );
+  }
+  const installRoots = [
+    "C:\\Program Files (x86)\\Warcraft III",
+    "C:\\Program Files\\Warcraft III",
+  ];
+  for (const root of installRoots) {
+    candidates.push(
+      path.join(root, "World Editor.exe"),
+      path.join(root, "WorldEditor.exe"),
+      path.join(root, "_retail_", "x86_64", "World Editor.exe"),
+      path.join(root, "_retail_", "x86_64", "WorldEditor.exe"),
+      path.join(root, "x86_64", "World Editor.exe"),
+      path.join(root, "x86_64", "WorldEditor.exe"),
+    );
+  }
+  return candidates.find((candidate) => existsSync(candidate)) || null;
+}
+
 function findCustomMapData() {
   const home = os.homedir();
   const candidates = [
@@ -39,4 +67,4 @@ function findCustomMapData() {
   return candidates.find((dir) => fs.existsSync(dir)) || candidates[0] || null;
 }
 
-module.exports = { findWc3Exe, wc3RootFor, findCustomMapData };
+module.exports = { findWc3Exe, findWorldEditorExe, wc3RootFor, findCustomMapData };
