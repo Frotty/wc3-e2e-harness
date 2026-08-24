@@ -30,6 +30,8 @@ const F10_CYCLE_EVERY_MS = 8000;
 const MENU_SETTLE_MS = 800;
 const SCREEN_PROBE_MS = 1000;
 const MAP_LOAD_SETTLE_MS = 1000;
+const QUIT_GRACE_MS = 3000;
+const QUIT_CLEANUP_MS = 2000;
 
 class RunFailure extends Error {}
 
@@ -227,9 +229,20 @@ async function runSuite(options) {
       await step();
     }
 
-    // --- Loading: READY proves the map armed behind the loading screen ------
-    // LOADED is emitted by a game-time timer, so mapLoadOnly must still reach
-    // the unpause phase after READY in order to let that timer advance.
+    // --- Loading: arm the map and clear the loading screen ------------------
+    // Map init runs behind the loading screen. Some maps do not publish READY
+    // until a timer callback after init, so waiting for READY before sending
+    // Space would deadlock forever on "PRESS ANY KEY TO CONTINUE".
+    let lastSpaceAt = 0;
+    let spaceCount = 0;
+    const sendSpace = async (phase) => {
+      const focused = await win32.foreground(pid);
+      const sent = await win32.postKey(pid, "space");
+      artifacts.appendTimeline({ at: Date.now(), event: "input", phase, key: "space", focused, sent });
+      log(`  ${phase}: Space (focus=${String(focused)} sent=${String(sent)})`);
+      return sent;
+    };
+
     if (!machine.verdict) {
       machine.enter("LOADING");
       while (!loadingComplete({
@@ -238,6 +251,12 @@ async function runSuite(options) {
         running: seen.running,
         verdict: machine.verdict,
       })) {
+        const now = Date.now();
+        if (now - lastSpaceAt >= SPACE_RETRY_MS) {
+          lastSpaceAt = now;
+          spaceCount++;
+          await sendSpace("LOADING");
+        }
         await step();
       }
     }
@@ -250,9 +269,7 @@ async function runSuite(options) {
       verdict: machine.verdict,
     })) {
       machine.enter("UNPAUSE");
-      let lastSpaceAt = 0;
       let lastF10At = 0;
-      let spaceCount = 0;
       while (!unpauseComplete({
         mapLoadOnly,
         loaded: seen.loaded,
@@ -263,8 +280,7 @@ async function runSuite(options) {
         if (now - lastSpaceAt >= SPACE_RETRY_MS) {
           lastSpaceAt = now;
           spaceCount++;
-          await win32.foreground(pid);
-          await win32.postKey(pid, "space");
+          await sendSpace("UNPAUSE");
         }
         // Mandatory, not a timeout fallback: first cycle right after the first
         // Space, repeated while the clock still is not advancing.
@@ -305,7 +321,7 @@ async function runSuite(options) {
     log("  quitting (Alt+F4)");
     await win32.foreground(pid);
     await win32.postKey(pid, "f4", true);
-    const quitDeadline = Date.now() + 15_000;
+    const quitDeadline = Date.now() + QUIT_GRACE_MS;
     while (win32.isProcessRunning(pid) && Date.now() < quitDeadline) {
       await win32.sleep(500);
     }
@@ -313,14 +329,14 @@ async function runSuite(options) {
       shutdown = "left-open";
     } else {
       shutdown = win32.isProcessRunning(pid) ? "forced" : "clean";
-      await win32.killWc3PidsExcept(existingWc3Pids);
+      await win32.killWc3PidsExcept(existingWc3Pids, QUIT_CLEANUP_MS);
     }
   } catch (error) {
     const reason = error instanceof RunFailure ? error.message : `unexpected: ${error.message}`;
     if (pid && win32.isProcessRunning(pid)) {
       await win32.screenshot(pid, path.join(artifacts.dir, "failure.png"));
     }
-    if (!keepOpen && launchSnapshotTaken) await win32.killWc3PidsExcept(existingWc3Pids);
+    if (!keepOpen && launchSnapshotTaken) await win32.killWc3PidsExcept(existingWc3Pids, QUIT_CLEANUP_MS);
     removeOwnedArmedFile();
     shutdown = "failed";
     const result = artifacts.writeResult({ ...summary(machine, seen, shutdown), failure: reason });

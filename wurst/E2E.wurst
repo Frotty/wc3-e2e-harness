@@ -112,15 +112,21 @@ public class E2E
 		if runId == "" or nonce == "" or suiteId == ""
 			return
 		active = true
-		emit("READY", "{" + q("canReadFiles") + ":" + boolStr(CAN_READ_FILES) + "}")
-		// Game-time does not advance until the map has left the loading screen
-		// and the post-load pause has been cleared. Give map initialization a
-		// short settle window, then publish a durable load notification before
-		// starting the suite. This is also useful to callers that only need to
-		// answer "can this map start?".
-		doAfter(1.) ->
-			emit("LOADED", "{" + q("mapLoaded") + ":true}")
-			startSuite()
+		// Do not write the first protocol snapshot from init itself. Warcraft can
+		// execute map init while the loading screen is still being constructed;
+		// defer the write to the next timer callback so the file is durable and
+		// visible to the external watcher. The runner also sends Space while it
+		// is waiting for READY, because this callback may not run until the map
+		// leaves the loading screen.
+		doAfter(0.) ->
+			emit("READY", "{" + q("canReadFiles") + ":" + boolStr(CAN_READ_FILES) + "}")
+			// Game-time does not advance until the map has left the loading screen
+			// and the post-load pause has been cleared. Give map initialization a
+			// short settle window, then publish a durable load notification before
+			// starting the suite.
+			doAfter(1.) ->
+				emit("LOADED", "{" + q("mapLoaded") + ":true}")
+				startSuite()
 
 	static function assertTrue(string id, boolean condition)
 		if not active or finished
