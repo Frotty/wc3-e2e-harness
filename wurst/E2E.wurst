@@ -23,7 +23,7 @@ import LinkedList
 */
 
 /** Bumped on every protocol change; echoed in READY and verified by the runner. */
-public constant E2E_PROTOCOL_VERSION = 1
+public constant E2E_PROTOCOL_VERSION = 2
 
 constant HEARTBEAT_INTERVAL = 2.0
 constant MAX_FAILED_IDS = 8
@@ -113,9 +113,13 @@ public class E2E
 			return
 		active = true
 		emit("READY", "{" + q("canReadFiles") + ":" + boolStr(CAN_READ_FILES) + "}")
-		// First game-time tick: the game clock only advances once the loading
-		// screen and post-load pause are cleared, so this IS the start gate.
-		doAfter(0.) ->
+		// Game-time does not advance until the map has left the loading screen
+		// and the post-load pause has been cleared. Give map initialization a
+		// short settle window, then publish a durable load notification before
+		// starting the suite. This is also useful to callers that only need to
+		// answer "can this map start?".
+		doAfter(1.) ->
+			emit("LOADED", "{" + q("mapLoaded") + ":true}")
 			startSuite()
 
 	static function assertTrue(string id, boolean condition)

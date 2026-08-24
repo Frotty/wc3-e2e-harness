@@ -36,17 +36,48 @@ function isProcessRunning(pid) {
 }
 
 function listWc3Pids() {
-  const result = spawnSync("tasklist", ["/FI", "IMAGENAME eq Warcraft III.exe", "/NH", "/FO", "CSV"], {
-    shell: false,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: 10_000,
-  });
+  return listPidsByImageNames(["Warcraft III.exe"]);
+}
+
+function parseTasklistPids(stdout, imageNames) {
+  const wanted = new Set(imageNames.map((name) => name.toLowerCase()));
   const pids = new Set();
-  for (const match of String(result.stdout || "").matchAll(/"Warcraft III\.exe","(\d+)"/g)) {
-    pids.add(Number(match[1]));
+  for (const match of String(stdout || "").matchAll(/"([^"]+)","(\d+)"/g)) {
+    if (wanted.has(match[1].toLowerCase())) pids.add(Number(match[2]));
   }
   return pids;
+}
+
+function listPidsByImageNames(imageNames) {
+  const pids = new Set();
+  for (const imageName of imageNames) {
+    const result = spawnSync("tasklist", ["/FI", `IMAGENAME eq ${imageName}`, "/NH", "/FO", "CSV"], {
+      shell: false,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 10_000,
+    });
+    for (const pid of parseTasklistPids(result.stdout, [imageName])) pids.add(pid);
+  }
+  return pids;
+}
+
+function listWorldEditorPids() {
+  return listPidsByImageNames(["World Editor.exe", "WorldEditor.exe"]);
+}
+
+async function waitForNewProcess(existingPids, listPids, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const candidates = pidsNotIn(listPids(), existingPids);
+    if (candidates.length > 0) {
+      await sleep(1000);
+      const settled = pidsNotIn(listPids(), existingPids);
+      if (settled.length > 0) return settled[settled.length - 1];
+    }
+    await sleep(500);
+  }
+  return undefined;
 }
 
 function killProcess(pid) {
@@ -194,14 +225,18 @@ async function killAllWc3(timeoutMs = 10_000) {
 // launched its run. This preserves a user's existing game session while also
 // cleaning up the launcher/re-exec processes created by -launch.
 async function killWc3PidsExcept(preservePids, timeoutMs = 10_000) {
+  return killPidsExcept(listWc3Pids, preservePids, timeoutMs);
+}
+
+async function killPidsExcept(listPids, preservePids, timeoutMs = 10_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const ownedPids = pidsNotIn(listWc3Pids(), preservePids);
+    const ownedPids = pidsNotIn(listPids(), preservePids);
     if (ownedPids.length === 0) return true;
     for (const pid of ownedPids) killProcess(pid);
     await sleep(500);
   }
-  return [...listWc3Pids()].every((pid) => preservePids.has(pid));
+  return [...listPids()].every((pid) => preservePids.has(pid));
 }
 
 function pidsNotIn(pids, preservePids) {
@@ -226,17 +261,32 @@ async function screenshot(pid, outPath) {
   }
 }
 
+async function windowTitle(pid) {
+  try {
+    const encoded = await agent.request(["title", pid]);
+    return Buffer.from(encoded, "base64").toString("utf8");
+  } catch {
+    return null;
+  }
+}
+
 module.exports = {
   sleep,
   isProcessRunning,
   listWc3Pids,
+  listWorldEditorPids,
+  listPidsByImageNames,
+  parseTasklistPids,
   killProcess,
   waitForNewWc3Pid,
+  waitForNewProcess,
   agent,
   postKey,
   foreground,
   screenshot,
   killAllWc3,
   killWc3PidsExcept,
+  killPidsExcept,
   pidsNotIn,
+  windowTitle,
 };

@@ -9,6 +9,7 @@ const { encodeFrame } = require("../protocol/frame.cjs");
 const { encodeFileText } = require("../protocol/fileio.cjs");
 const { makeIdentity } = require("../protocol/snapshot.cjs");
 const { createChannelReader } = require("../protocol/channel.cjs");
+const { createModifiedFileReader } = require("../protocol/modified-file.cjs");
 const { createLifecycle } = require("../lifecycle/machine.cjs");
 const { createRealClock } = require("../lifecycle/clock.cjs");
 const { createArtifactWriter } = require("../artifacts.cjs");
@@ -23,10 +24,12 @@ const win32 = require("./win32.cjs");
  * (Escape + F10 cycle), and quit (F10, E, Q).
  */
 
-const POLL_MS = 300;
+const POLL_MS = 250;
 const SPACE_RETRY_MS = 2500;
 const F10_CYCLE_EVERY_MS = 8000;
 const MENU_SETTLE_MS = 800;
+const SCREEN_PROBE_MS = 1000;
+const MAP_LOAD_SETTLE_MS = 1000;
 
 class RunFailure extends Error {}
 
@@ -41,6 +44,11 @@ async function runSuite(options) {
     gameArgs: rawGameArgs = "-nowfpause -launch",
     slots = [],
     keepOpen = false,
+    mapLoadOnly = false,
+    screenProbe = null,
+    pollMs = POLL_MS,
+    screenProbeMs = SCREEN_PROBE_MS,
+    mapLoadSettleMs = MAP_LOAD_SETTLE_MS,
     artifactRoot,
     deadlines = {},
     log = console.log,
@@ -80,19 +88,15 @@ async function runSuite(options) {
     deadlines: { suite: suiteTimeoutMs, ...deadlines },
   });
   const reader = createChannelReader(abilityId, identity);
-  const seen = { ready: false, running: false, heartbeat: -1, terminalPayload: null };
+  const seen = { ready: false, loaded: false, running: false, heartbeat: -1, terminalPayload: null };
+  const outputReaders = outputs.map(() => createModifiedFileReader());
+  let nextScreenProbeAt = 0;
+  let screenProbeCount = 0;
+  let loadedAt = null;
   let pid;
   let existingWc3Pids = new Set();
   let launchSnapshotTaken = false;
   let shutdown = "none";
-
-  const readOrNull = (file) => {
-    try {
-      return fs.readFileSync(file, "utf8");
-    } catch {
-      return null;
-    }
-  };
 
   // One shared observation step for every phase.
   const step = async () => {
@@ -101,13 +105,18 @@ async function runSuite(options) {
       if (machine.failure) throw new RunFailure(machine.failure.reason);
       return;
     }
-    const polled = reader.poll([readOrNull(outputs[0]), readOrNull(outputs[1])]);
+    const polled = reader.poll(outputs.map((file, index) => outputReaders[index].read(file)));
     if (polled.accepted) {
       const snap = polled.accepted;
       artifacts.appendTimeline({ at: Date.now(), seq: snap.seq, state: snap.state, heartbeat: snap.heartbeat });
       if (snap.state === "READY") {
         seen.ready = true;
         log(`  READY (seq ${snap.seq})`);
+        if (mapLoadOnly && loadedAt === null) loadedAt = Date.now();
+      } else if (snap.state === "LOADED") {
+        seen.loaded = true;
+        loadedAt ??= Date.now();
+        log(`  LOADED (seq ${snap.seq})`);
       } else if (snap.state === "RUNNING") {
         if (!seen.running) log(`  RUNNING (seq ${snap.seq})`);
         seen.running = true;
@@ -119,13 +128,34 @@ async function runSuite(options) {
         log(`  ${snap.state} (seq ${snap.seq})`);
       }
     }
+
+    if (screenProbe && (machine.state === "LOADING" || machine.state === "UNPAUSE") && Date.now() >= nextScreenProbeAt) {
+      nextScreenProbeAt = Date.now() + screenProbeMs;
+      const probeId = ++screenProbeCount;
+      const screenshotPath = path.join(artifacts.dir, "screens", `screen-${probeId}.png`);
+      const capturedPath = await win32.screenshot(pid, screenshotPath);
+      try {
+        const screen = await screenProbe({
+          pid,
+          phase: machine.state,
+          screenshotPath: capturedPath,
+          artifactDir: artifacts.dir,
+        });
+        artifacts.appendTimeline({ at: Date.now(), event: "screen-probe", phase: machine.state, result: screen ?? "unknown" });
+        if (screen === "main-menu") {
+          machine.noteFailure("main-menu-before-map-load");
+        }
+      } catch (error) {
+        machine.noteFailure(`screen-probe-failed: ${error.message}`);
+      }
+    }
     const tick = machine.tick();
     if (tick.failed) throw new RunFailure(tick.failed);
     if (tick.recover) {
       log(`  recovery ladder (attempt ${tick.attempt}: ${tick.recover})`);
       await recoveryLadder();
     }
-    await win32.sleep(POLL_MS);
+    await win32.sleep(pollMs);
   };
 
   const f10Cycle = async () => {
@@ -188,8 +218,17 @@ async function runSuite(options) {
     // (seen.running also exits: READY can be missed when A/B were overwritten)
     if (!machine.verdict) {
       machine.enter("LOADING");
-      while (!seen.ready && !seen.running && !machine.verdict) {
+      while (!seen.ready && !seen.loaded && !seen.running && !machine.verdict) {
         await step();
+      }
+    }
+
+    if (mapLoadOnly && loadedAt !== null && !machine.verdict) {
+      const settleUntil = loadedAt + mapLoadSettleMs;
+      while (Date.now() < settleUntil && !machine.verdict) await step();
+      if (!machine.verdict) {
+        machine.noteTerminal("PASS");
+        seen.terminalPayload = { mapLoaded: true };
       }
     }
 
@@ -268,6 +307,7 @@ function summary(machine, seen, shutdown) {
     verdict: machine.verdict,
     failure: machine.failure?.reason ?? null,
     readyObserved: seen.ready,
+    loadedObserved: seen.loaded,
     runningObserved: seen.running,
     heartbeats: seen.heartbeat,
     payload: seen.terminalPayload,

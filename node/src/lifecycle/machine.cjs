@@ -135,6 +135,13 @@ function createLifecycle({ clock, deadlines = {}, maxStallRecoveries = 3 } = {})
       }
     },
 
+    noteFailure(reason) {
+      if (typeof reason !== "string" || reason.length === 0) {
+        throw new Error("noteFailure requires a non-empty reason");
+      }
+      fail(reason);
+    },
+
     noteProcessExit() {
       record("process-exit");
       if (verdict) {
