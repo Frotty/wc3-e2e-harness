@@ -7,14 +7,21 @@ const path = require("node:path");
 // Per-machine path discovery (plan: "Environment Prerequisites"), ported from
 // Castle Fight's config auto-detection.
 
-function findWc3Exe() {
+/** Checked first, ahead of every default candidate, for an install outside the usual Program
+    Files locations (a different drive, a Battle.net custom install directory, ...). Unset by
+    default, so machines that never set it keep using the fixed candidate list exactly as before. */
+const WC3_EXE_ENV_VAR = "WC3_EXE_PATH";
+
+function findWc3Exe({ env = process.env, existsSync = fs.existsSync } = {}) {
+  const override = env[WC3_EXE_ENV_VAR];
+  if (override && existsSync(override)) return override;
   const candidates = [
     "C:\\Program Files (x86)\\Warcraft III\\_retail_\\x86_64\\Warcraft III.exe",
     "C:\\Program Files\\Warcraft III\\_retail_\\x86_64\\Warcraft III.exe",
     "C:\\Program Files (x86)\\Warcraft III\\x86_64\\Warcraft III.exe",
     "C:\\Program Files\\Warcraft III\\x86_64\\Warcraft III.exe",
   ];
-  return candidates.find((p) => fs.existsSync(p)) || null;
+  return candidates.find((p) => existsSync(p)) || null;
 }
 
 function wc3RootFor(gameExe) {
