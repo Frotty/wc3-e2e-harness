@@ -88,7 +88,7 @@ function killProcess(pid) {
 // WC3's -launch flow can re-exec: the first pid may be a short-lived launcher.
 // Require the candidate to survive a settle re-check; if it died, track the
 // replacement.
-async function waitForNewWc3Pid(existingPids, timeoutMs = 20_000) {
+async function waitForNewWc3Pid(existingPids, timeoutMs = 20_000, claimedPids = null) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     let candidate;
@@ -98,6 +98,8 @@ async function waitForNewWc3Pid(existingPids, timeoutMs = 20_000) {
     if (candidate !== undefined) {
       await sleep(1500);
       const recheck = listWc3Pids();
+      const newPids = pidsNotIn(recheck, existingPids);
+      if (claimedPids) for (const pid of newPids) claimedPids.add(pid);
       if (recheck.has(candidate)) return candidate;
       for (const pid of recheck) {
         if (!existingPids.has(pid)) return pid;
@@ -127,8 +129,9 @@ class Win32Agent {
       "-File",
       AGENT_PS1,
     ], { stdio: ["pipe", "pipe", "ignore"], shell: false });
-    proc.on("error", () => this.handleDeath());
-    proc.on("exit", () => this.handleDeath());
+    this.proc = proc;
+    proc.on("error", () => this.handleDeath(proc));
+    proc.on("exit", () => this.handleDeath(proc));
     proc.stdout.on("data", (chunk) => {
       this.buf += chunk;
       let index;
@@ -145,10 +148,10 @@ class Win32Agent {
         }
       }
     });
-    this.proc = proc;
   }
 
-  handleDeath() {
+  handleDeath(proc) {
+    if (proc && proc !== this.proc) return;
     const pending = this.pending;
     this.pending = new Map();
     this.proc = null;
@@ -184,15 +187,28 @@ class Win32Agent {
 
   shutdown() {
     if (this.proc) {
+      const proc = this.proc;
       try {
-        this.proc.kill();
+        proc.kill();
       } catch {}
-      this.proc = null;
+      this.handleDeath(proc);
     }
   }
 }
 
 const agent = new Win32Agent();
+let agentUsers = 0;
+
+function acquireAgent() {
+  agentUsers++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    agentUsers = Math.max(0, agentUsers - 1);
+    if (agentUsers === 0) agent.shutdown();
+  };
+}
 
 // Soft-failure wrappers: a missing window or dead agent returns false/null so
 // the run loop can absorb it and retry or fail on its own deadline.
@@ -239,6 +255,18 @@ async function killPidsExcept(listPids, preservePids, timeoutMs = 10_000) {
   return [...listPids()].every((pid) => preservePids.has(pid));
 }
 
+async function killSpecificPids(pids, timeoutMs = 10_000) {
+  const ownedPids = [...new Set(pids)].filter(Boolean);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const alive = ownedPids.filter((pid) => isProcessRunning(pid));
+    if (alive.length === 0) return true;
+    for (const pid of alive) killProcess(pid);
+    await sleep(500);
+  }
+  return ownedPids.every((pid) => !isProcessRunning(pid));
+}
+
 function pidsNotIn(pids, preservePids) {
   return [...pids].filter((pid) => !preservePids.has(pid));
 }
@@ -281,11 +309,13 @@ module.exports = {
   waitForNewWc3Pid,
   waitForNewProcess,
   agent,
+  acquireAgent,
   postKey,
   foreground,
   screenshot,
   killAllWc3,
   killWc3PidsExcept,
+  killSpecificPids,
   killPidsExcept,
   pidsNotIn,
   windowTitle,

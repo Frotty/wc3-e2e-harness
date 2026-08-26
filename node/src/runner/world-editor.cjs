@@ -1,10 +1,11 @@
 "use strict";
 
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
-const { createArtifactWriter } = require("../artifacts.cjs");
+const { createArtifactWriter, pruneArtifactRoot } = require("../artifacts.cjs");
 const { findWc3Exe, findWorldEditorExe } = require("./paths.cjs");
 const win32 = require("./win32.cjs");
 
@@ -53,8 +54,10 @@ async function runWorldEditorMap(options) {
   }
 
   const mapName = path.basename(resolvedMapPath, path.extname(resolvedMapPath));
-  const runId = `world-editor-${mapName}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  const nonce = crypto.randomBytes(6).toString("hex");
+  const runId = `world-editor-${mapName}-${new Date().toISOString().replace(/[:.]/g, "-")}-${nonce}`;
   const artifacts = createArtifactWriter({ dir: path.join(artifactRoot, runId) });
+  const releaseAgent = win32.acquireAgent();
   const existingPids = win32.listWorldEditorPids();
   const initialTitles = new Map();
   for (const pid of existingPids) {
@@ -76,7 +79,10 @@ async function runWorldEditorMap(options) {
     editorExe,
     launchMode,
     timeoutMs,
+    runnerPid: process.pid,
+    nonce,
   });
+  pruneArtifactRoot({ root: artifactRoot, currentDir: artifacts.dir });
 
   const launch = () => {
     const child = launchMode === "association"
@@ -124,7 +130,8 @@ async function runWorldEditorMap(options) {
       shutdown = "preserved-existing";
     }
     const full = artifacts.writeResult({ ...result, shutdown });
-    win32.agent.shutdown();
+    artifacts.complete();
+    releaseAgent();
     return { ...full, exitCode: full.verdict === "PASS" ? 0 : 1, artifactDir: artifacts.dir };
   };
 
@@ -207,7 +214,8 @@ async function runWorldEditorMap(options) {
       map: resolvedMapPath,
       shutdown,
     });
-    win32.agent.shutdown();
+    artifacts.complete();
+    releaseAgent();
     return { ...result, exitCode: reason.startsWith("unexpected") ? 2 : 1, artifactDir: artifacts.dir };
   }
 }

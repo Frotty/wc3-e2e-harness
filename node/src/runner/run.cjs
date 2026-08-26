@@ -12,7 +12,7 @@ const { createChannelReader } = require("../protocol/channel.cjs");
 const { createModifiedFileReader } = require("../protocol/modified-file.cjs");
 const { createLifecycle } = require("../lifecycle/machine.cjs");
 const { createRealClock } = require("../lifecycle/clock.cjs");
-const { createArtifactWriter } = require("../artifacts.cjs");
+const { createArtifactWriter, pruneArtifactRoot } = require("../artifacts.cjs");
 const { findWc3Exe, wc3RootFor, findCustomMapData } = require("./paths.cjs");
 const { createWgc, sha1File } = require("./wgc.cjs");
 const win32 = require("./win32.cjs");
@@ -29,9 +29,13 @@ const SPACE_RETRY_MS = 2500;
 const F10_CYCLE_EVERY_MS = 8000;
 const MENU_SETTLE_MS = 800;
 const SCREEN_PROBE_MS = 1000;
+const SCREEN_PROBE_TIMEOUT_MS = 5000;
 const MAP_LOAD_SETTLE_MS = 1000;
+const MAP_STARTUP_TIMEOUT_MS = 20_000;
+const RUN_LOCK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const QUIT_GRACE_MS = 3000;
 const QUIT_CLEANUP_MS = 2000;
+const FAILURE_SCREENSHOT_TIMEOUT_MS = 2000;
 
 class RunFailure extends Error {}
 
@@ -50,7 +54,9 @@ async function runSuite(options) {
     screenProbe = null,
     pollMs = POLL_MS,
     screenProbeMs = SCREEN_PROBE_MS,
+    screenProbeTimeoutMs = SCREEN_PROBE_TIMEOUT_MS,
     mapLoadSettleMs = MAP_LOAD_SETTLE_MS,
+    startupTimeoutMs = MAP_STARTUP_TIMEOUT_MS,
     artifactRoot,
     deadlines = {},
     log = console.log,
@@ -69,23 +75,19 @@ async function runSuite(options) {
   const customMapData = options.customMapData ?? findCustomMapData();
   if (!customMapData) throw new RunFailure("CustomMapData directory could not be resolved");
   if (!fs.existsSync(mapPath)) throw new RunFailure(`Map not found: ${mapPath}`);
-  const runId = `${suiteId}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   const nonce = crypto.randomBytes(6).toString("hex");
+  const runId = `${suiteId}-${new Date().toISOString().replace(/[:.]/g, "-")}-${nonce}`;
   const buildId = sha1File(mapPath).slice(0, 10);
   const identity = makeIdentity({ projectId, buildId, runId, nonce, suiteId });
   const artifacts = createArtifactWriter({ dir: path.join(artifactRoot, runId) });
+  const releaseAgent = win32.acquireAgent();
 
   const channelDir = path.join(customMapData, "wc3-e2e", projectId);
   const outputs = [path.join(channelDir, "output-a.pld"), path.join(channelDir, "output-b.pld")];
   const armedPath = path.join(channelDir, "armed.pld");
-  for (const stale of outputs) {
-    if (fs.existsSync(stale)) fs.unlinkSync(stale);
-  }
   const armedBody =
     `armed;v=${identity.v};projectId=${projectId};buildId=${buildId};runId=${runId};nonce=${nonce};suiteId=${suiteId}`;
   const armedText = encodeFileText(abilityId, encodeFrame(armedBody));
-  fs.mkdirSync(channelDir, { recursive: true });
-  fs.writeFileSync(armedPath, armedText, "utf8");
   const removeOwnedArmedFile = () => {
     try {
       if (fs.existsSync(armedPath) && fs.readFileSync(armedPath, "utf8") === armedText) fs.unlinkSync(armedPath);
@@ -104,17 +106,27 @@ async function runSuite(options) {
   let nextScreenProbeAt = 0;
   let screenProbeCount = 0;
   let loadedAt = null;
+  let loadingStartedAt = null;
   let pid;
   let existingWc3Pids = new Set();
+  const ownedWc3Pids = new Set();
   let launchSnapshotTaken = false;
   let shutdown = "none";
+  let releaseRunLock = () => {};
+  let releaseLaunchLock = () => {};
 
   // One shared observation step for every phase.
   const step = async () => {
     if (pid !== undefined && !win32.isProcessRunning(pid)) {
-      machine.noteProcessExit();
-      if (machine.failure) throw new RunFailure(machine.failure.reason);
-      return;
+      const replacement = [...ownedWc3Pids].find((candidate) => win32.isProcessRunning(candidate));
+      if (replacement !== undefined) {
+        pid = replacement;
+        log(`  switched to replacement pid ${pid}`);
+      } else {
+        machine.noteProcessExit();
+        if (machine.failure) throw new RunFailure(machine.failure.reason);
+        return;
+      }
     }
     const polled = reader.poll(outputs.map((file, index) => outputReaders[index].read(file)));
     if (polled.accepted) {
@@ -139,7 +151,16 @@ async function runSuite(options) {
         machine.noteHeartbeat(snap.heartbeat);
       } else {
         seen.terminalPayload = snap.payload;
-        machine.noteTerminal(snap.state);
+        if (terminalSnapshotAllowed({
+          mapLoadOnly,
+          state: snap.state,
+          loaded: seen.loaded,
+          running: seen.running,
+        })) {
+          machine.noteTerminal(snap.state);
+        } else {
+          machine.noteFailure("pass-before-map-load");
+        }
         log(`  ${snap.state} (seq ${snap.seq})`);
       }
     }
@@ -148,25 +169,50 @@ async function runSuite(options) {
       nextScreenProbeAt = Date.now() + screenProbeMs;
       const probeId = ++screenProbeCount;
       const screenshotPath = path.join(artifacts.dir, "screens", `screen-${probeId}.png`);
-      const capturedPath = await win32.screenshot(pid, screenshotPath);
+      const probeBudgetMs = Math.max(1, Math.min(
+        screenProbeTimeoutMs,
+        loadingStartedAt !== null && Number.isFinite(startupTimeoutMs)
+          ? Math.max(1, startupTimeoutMs - (Date.now() - loadingStartedAt))
+          : screenProbeTimeoutMs,
+      ));
       try {
-        const screen = await screenProbe({
+        const capturedPath = await withTimeout(win32.screenshot(pid, screenshotPath), probeBudgetMs, "screen-probe-timeout");
+        const screen = await withTimeout(screenProbe({
           pid,
           phase: machine.state,
           screenshotPath: capturedPath,
           artifactDir: artifacts.dir,
-        });
+        }), Math.max(1, Math.min(probeBudgetMs, loadingStartedAt !== null && Number.isFinite(startupTimeoutMs)
+          ? Math.max(1, startupTimeoutMs - (Date.now() - loadingStartedAt))
+          : probeBudgetMs)), "screen-probe-timeout");
         artifacts.appendTimeline({ at: Date.now(), event: "screen-probe", phase: machine.state, result: screen ?? "unknown" });
-        if (screen === "main-menu") {
-          machine.noteFailure("main-menu-before-map-load");
-        }
       } catch (error) {
-        machine.noteFailure(`screen-probe-failed: ${error.message}`);
+        artifacts.appendTimeline({ at: Date.now(), event: "screen-probe-failed", phase: machine.state, error: error.message, diagnosticOnly: true });
       }
+    }
+    if (mapStartupTimedOut({
+      startedAt: loadingStartedAt,
+      now: Date.now(),
+      timeoutMs: startupTimeoutMs,
+      ready: seen.ready,
+      loaded: seen.loaded,
+      running: seen.running,
+      verdict: machine.verdict,
+    })) {
+      machine.noteFailure("map-startup-timeout");
+      // Do not make the watchdog wait on another Win32 request here. The
+      // title is useful diagnostics, but it must never delay the failure.
+      artifacts.appendTimeline({ at: Date.now(), event: "map-startup-timeout" });
     }
     const tick = machine.tick();
     if (tick.failed) throw new RunFailure(tick.failed);
     if (tick.recover) {
+      // Once the map has published RUNNING, it has already crossed the
+      // loading/unpause boundary. Menu-key recovery at this point can close a
+      // user's game or hide a real suite failure. A suite stall is a terminal
+      // diagnostic condition; only use the keyboard recovery ladder while the
+      // runner is still trying to leave the loading screens.
+      if (seen.running) throw new RunFailure("heartbeat-stall-after-suite-start");
       log(`  recovery ladder (attempt ${tick.attempt}: ${tick.recover})`);
       await recoveryLadder();
     }
@@ -190,6 +236,16 @@ async function runSuite(options) {
   };
 
   try {
+    releaseRunLock = acquireRunLock(path.join(channelDir, "run.lock"), {
+      pid: process.pid,
+      startedAt: Date.now(),
+      runId,
+    });
+    fs.mkdirSync(channelDir, { recursive: true });
+    for (const stale of outputs) {
+      if (fs.existsSync(stale)) fs.unlinkSync(stale);
+    }
+    fs.writeFileSync(armedPath, armedText, "utf8");
     // --- Launch ------------------------------------------------------------
     machine.enter("LAUNCH");
     let loadFile = mapPath;
@@ -209,8 +265,14 @@ async function runSuite(options) {
     } else {
       launchArgs = ["-launch", "-windowmode", "windowed", "-nowfpause", "-loadfile", loadFile];
     }
-    artifacts.writeRun({ identity, map: mapPath, loadFile, wgcSpeed, suiteTimeoutMs });
+    artifacts.writeRun({ identity, map: mapPath, loadFile, wgcSpeed, suiteTimeoutMs, startupTimeoutMs, runnerPid: process.pid });
+    pruneArtifactRoot({ root: artifactRoot, currentDir: artifacts.dir });
     log(`Launching ${suiteId} (speed ${wgcSpeed > 0 ? `${wgcSpeed}x` : "1x"})...`);
+    releaseLaunchLock = await acquireRunLockEventually(path.join(customMapData, "wc3-e2e", "launch.lock"), {
+      pid: process.pid,
+      startedAt: Date.now(),
+      runId,
+    }, 30_000);
     existingWc3Pids = win32.listWc3Pids();
     launchSnapshotTaken = true;
     spawn("cmd.exe", ["/d", "/s", "/c", "start", "", wc3Exe, ...launchArgs], {
@@ -219,8 +281,13 @@ async function runSuite(options) {
       shell: false,
       cwd: wgcSpeed > 0 ? wc3Root : undefined,
     }).unref();
-    pid = await win32.waitForNewWc3Pid(existingWc3Pids);
+    pid = await win32.waitForNewWc3Pid(existingWc3Pids, 20_000, ownedWc3Pids);
+    releaseLaunchLock();
+    releaseLaunchLock = () => {};
     if (!pid) throw new RunFailure("wc3-process-did-not-appear");
+    for (const candidate of win32.listWc3Pids()) {
+      if (!existingWc3Pids.has(candidate)) ownedWc3Pids.add(candidate);
+    }
     log(`  pid ${pid}`);
 
     // --- Window ------------------------------------------------------------
@@ -245,6 +312,7 @@ async function runSuite(options) {
 
     if (!machine.verdict) {
       machine.enter("LOADING");
+      loadingStartedAt = Date.now();
       while (!loadingComplete({
         ready: seen.ready,
         loaded: seen.loaded,
@@ -266,6 +334,7 @@ async function runSuite(options) {
       mapLoadOnly,
       loaded: seen.loaded,
       running: seen.running,
+      heartbeat: seen.heartbeat,
       verdict: machine.verdict,
     })) {
       machine.enter("UNPAUSE");
@@ -274,8 +343,16 @@ async function runSuite(options) {
         mapLoadOnly,
         loaded: seen.loaded,
         running: seen.running,
+        heartbeat: seen.heartbeat,
         verdict: machine.verdict,
       })) {
+        // RUNNING is the map-side boundary. A heartbeat-0 snapshot can arrive
+        // before the first timer tick, but it is still proof that the suite is
+        // live; wait for the next save-file heartbeat without touching menus.
+        if (seen.running) {
+          await step();
+          continue;
+        }
         const now = Date.now();
         if (now - lastSpaceAt >= SPACE_RETRY_MS) {
           lastSpaceAt = now;
@@ -329,24 +406,35 @@ async function runSuite(options) {
       shutdown = "left-open";
     } else {
       shutdown = win32.isProcessRunning(pid) ? "forced" : "clean";
-      await win32.killWc3PidsExcept(existingWc3Pids, QUIT_CLEANUP_MS);
+      await win32.killSpecificPids(ownedWc3Pids, QUIT_CLEANUP_MS);
     }
   } catch (error) {
     const reason = error instanceof RunFailure ? error.message : `unexpected: ${error.message}`;
-    if (pid && win32.isProcessRunning(pid)) {
-      await win32.screenshot(pid, path.join(artifacts.dir, "failure.png"));
+    if (pid && win32.isProcessRunning(pid) && reason !== "map-startup-timeout") {
+      await withTimeout(
+        win32.screenshot(pid, path.join(artifacts.dir, "failure.png")),
+        FAILURE_SCREENSHOT_TIMEOUT_MS,
+        "failure-screenshot-timeout",
+      ).catch(() => {});
     }
-    if (!keepOpen && launchSnapshotTaken) await win32.killWc3PidsExcept(existingWc3Pids, QUIT_CLEANUP_MS);
+    releaseLaunchLock();
+    // A failed run must not leave a live map writer behind after releasing
+    // either lock, even when keepOpen was requested for successful runs.
+    if (launchSnapshotTaken) await win32.killSpecificPids(ownedWc3Pids, QUIT_CLEANUP_MS);
     removeOwnedArmedFile();
+    releaseRunLock();
     shutdown = "failed";
     const result = artifacts.writeResult({ ...summary(machine, seen, shutdown), failure: reason });
-    win32.agent.shutdown();
+    artifacts.complete();
+    releaseAgent();
     return { ...result, exitCode: reason.startsWith("unexpected") ? 2 : 1, artifactDir: artifacts.dir };
   }
 
   const result = artifacts.writeResult(summary(machine, seen, shutdown));
+  artifacts.complete();
   removeOwnedArmedFile();
-  win32.agent.shutdown();
+  releaseRunLock();
+  releaseAgent();
   return { ...result, exitCode: result.verdict === "PASS" ? 0 : 1, artifactDir: artifacts.dir };
 }
 
@@ -367,8 +455,20 @@ function loadingComplete({ ready, loaded, running, verdict }) {
   return Boolean(verdict) || ready || loaded || running;
 }
 
-function unpauseComplete({ mapLoadOnly, loaded, running, verdict }) {
-  return Boolean(verdict) || running || (mapLoadOnly && loaded);
+function mapStartupTimedOut({ startedAt, now, timeoutMs, ready, loaded, running, verdict }) {
+  return Number.isFinite(timeoutMs) && timeoutMs > 0 && startedAt !== null && now - startedAt >= timeoutMs
+    && !ready && !loaded && !running && !verdict;
+}
+
+function terminalSnapshotAllowed({ mapLoadOnly, state, loaded, running }) {
+  return !mapLoadOnly || state !== "PASS" || loaded || running;
+}
+
+function unpauseComplete({ mapLoadOnly, loaded, running, heartbeat = -1, verdict }) {
+  // E2E.startSuite emits an initial RUNNING snapshot before the game clock is
+  // necessarily advancing. Require one heartbeat for normal suites so a
+  // map-side timer-backed suite cannot remain paused behind a false positive.
+  return Boolean(verdict) || (mapLoadOnly && (loaded || running)) || (!mapLoadOnly && running && heartbeat > 0);
 }
 
 function enterMapLoadConfirmation(machine) {
@@ -379,9 +479,106 @@ function enterMapLoadConfirmation(machine) {
 }
 
 module.exports = {
+  acquireRunLock,
   runSuite,
   RunFailure,
   loadingComplete,
+  mapStartupTimedOut,
+  terminalSnapshotAllowed,
   unpauseComplete,
   enterMapLoadConfirmation,
 };
+
+function withTimeout(promise, timeoutMs, message) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function acquireRunLock(lockPath, metadata) {
+  const lockBody = JSON.stringify(metadata);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const tempPath = `${lockPath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+    try {
+      // Publish complete metadata atomically. A contender must never see
+      // an empty lock and mistake an in-progress owner for a stale one.
+      fs.writeFileSync(tempPath, lockBody, { encoding: "utf8", flag: "wx" });
+      // Windows rename can replace an existing destination. A hard-link
+      // creation is atomic and fails with EEXIST instead, so no contender can
+      // steal an already-owned lock.
+      fs.linkSync(tempPath, lockPath);
+      try { fs.unlinkSync(tempPath); } catch {}
+      return () => {
+        try {
+          if (fs.existsSync(lockPath) && fs.readFileSync(lockPath, "utf8") === lockBody) fs.unlinkSync(lockPath);
+        } catch {
+          // Cleanup is best-effort; the next runner can reap a dead lock.
+        }
+      };
+    } catch (error) {
+      try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch {}
+      if (error.code !== "EEXIST" && error.code !== "EPERM") throw error;
+      let lockStat;
+      try {
+        lockStat = fs.statSync(lockPath);
+      } catch {
+        continue;
+      }
+      let lockContents;
+      let owner;
+      try {
+        lockContents = fs.readFileSync(lockPath, "utf8");
+        owner = JSON.parse(lockContents);
+      } catch {
+        lockContents = "";
+        owner = null;
+      }
+      const lockAge = Date.now() - lockStat.mtimeMs;
+      if (!owner && lockAge < RUN_LOCK_MAX_AGE_MS) {
+        throw new RunFailure(`project-run-already-active: ${lockPath}`);
+      }
+      const ownerAlive = Number.isInteger(owner?.pid) && processAlive(owner.pid);
+      const ownerAge = Number.isFinite(owner?.startedAt) ? Date.now() - owner.startedAt : Infinity;
+      if (ownerAlive && ownerAge < RUN_LOCK_MAX_AGE_MS) {
+        throw new RunFailure(`project-run-already-active: ${lockPath}`);
+      }
+      try {
+        const expectedContents = owner ? JSON.stringify(owner) : lockContents;
+        if (fs.existsSync(lockPath) && fs.readFileSync(lockPath, "utf8") === expectedContents) {
+          fs.unlinkSync(lockPath);
+        }
+      } catch {
+        // A concurrent owner may have replaced or removed the lock; retry once.
+      }
+    }
+  }
+  throw new RunFailure(`project-run-already-active: ${lockPath}`);
+}
+
+function processAlive(pid) {
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function acquireRunLockEventually(lockPath, metadata, waitMs) {
+  const deadline = Date.now() + waitMs;
+  while (true) {
+    try {
+      return acquireRunLock(lockPath, metadata);
+    } catch (error) {
+      if (!(error instanceof RunFailure)
+        || !error.message.startsWith("project-run-already-active:")
+        || Date.now() >= deadline) throw error;
+      await win32.sleep(Math.min(250, Math.max(1, deadline - Date.now())));
+    }
+  }
+}
