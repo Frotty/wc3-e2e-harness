@@ -38,6 +38,7 @@ test("artifact retention removes old inactive runs but preserves active runs", (
     fs.mkdirSync(old);
     fs.mkdirSync(recent);
     fs.writeFileSync(path.join(active, "run.json"), JSON.stringify({ runnerPid: process.pid }));
+    fs.writeFileSync(path.join(active, "result.json"), "{}\n");
     fs.writeFileSync(path.join(old, "result.json"), "{}\n");
     fs.writeFileSync(path.join(recent, "result.json"), "{}\n");
     const oldTime = new Date(Date.now() - 10_000);

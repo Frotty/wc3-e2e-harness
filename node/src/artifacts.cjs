@@ -66,8 +66,6 @@ function pruneArtifactRoot({
     .sort((a, b) => b.mtimeMs - a.mtimeMs);
 
   const removable = entries.filter(({ dir, mtimeMs }) => {
-    const resultPath = path.join(dir, "result.json");
-    if (fs.existsSync(resultPath)) return true;
     let run = null;
     try {
       run = JSON.parse(fs.readFileSync(path.join(dir, "run.json"), "utf8"));
@@ -76,6 +74,7 @@ function pruneArtifactRoot({
       // incomplete directory is safe to reap on the next invocation.
     }
     if (run && Number.isInteger(run.runnerPid) && isPidRunning(run.runnerPid)) return false;
+    if (fs.existsSync(path.join(dir, "result.json"))) return true;
     return now - mtimeMs >= staleIncompleteMs;
   });
 

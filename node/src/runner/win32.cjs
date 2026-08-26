@@ -129,8 +129,9 @@ class Win32Agent {
       "-File",
       AGENT_PS1,
     ], { stdio: ["pipe", "pipe", "ignore"], shell: false });
-    proc.on("error", () => this.handleDeath());
-    proc.on("exit", () => this.handleDeath());
+    this.proc = proc;
+    proc.on("error", () => this.handleDeath(proc));
+    proc.on("exit", () => this.handleDeath(proc));
     proc.stdout.on("data", (chunk) => {
       this.buf += chunk;
       let index;
@@ -147,10 +148,10 @@ class Win32Agent {
         }
       }
     });
-    this.proc = proc;
   }
 
-  handleDeath() {
+  handleDeath(proc) {
+    if (proc && proc !== this.proc) return;
     const pending = this.pending;
     this.pending = new Map();
     this.proc = null;
@@ -186,10 +187,11 @@ class Win32Agent {
 
   shutdown() {
     if (this.proc) {
+      const proc = this.proc;
       try {
-        this.proc.kill();
+        proc.kill();
       } catch {}
-      this.proc = null;
+      this.handleDeath(proc);
     }
   }
 }
