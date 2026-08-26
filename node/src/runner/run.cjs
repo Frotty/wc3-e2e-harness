@@ -198,9 +198,10 @@ async function runSuite(options) {
       running: seen.running,
       verdict: machine.verdict,
     })) {
-      const title = await win32.windowTitle(pid);
-      artifacts.appendTimeline({ at: Date.now(), event: "map-startup-timeout", windowTitle: title });
       machine.noteFailure("map-startup-timeout");
+      // Do not make the watchdog wait on another Win32 request here. The
+      // title is useful diagnostics, but it must never delay the failure.
+      artifacts.appendTimeline({ at: Date.now(), event: "map-startup-timeout" });
     }
     const tick = machine.tick();
     if (tick.failed) throw new RunFailure(tick.failed);
