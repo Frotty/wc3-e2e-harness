@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 "use strict";
 
 /* Small CLI for consumers that do not need a project-owned runner.

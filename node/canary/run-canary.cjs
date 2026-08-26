@@ -81,7 +81,7 @@ async function main() {
       deadlines: expectStall ? { heartbeatStall: 10_000 } : {},
     });
     const ok = expectStall
-      ? result.verdict === null && result.failure === "heartbeat-stall-unrecovered"
+      ? result.verdict === null && result.failure === "heartbeat-stall-after-suite-start"
       : expectEmpty
         ? result.verdict === "PASS"
       : result.verdict === expected && result.readyObserved && result.runningObserved && result.heartbeats >= 1;

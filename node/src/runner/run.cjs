@@ -301,6 +301,13 @@ async function runSuite(options) {
         heartbeat: seen.heartbeat,
         verdict: machine.verdict,
       })) {
+        // RUNNING is the map-side boundary. A heartbeat-0 snapshot can arrive
+        // before the first timer tick, but it is still proof that the suite is
+        // live; wait for the next save-file heartbeat without touching menus.
+        if (seen.running) {
+          await step();
+          continue;
+        }
         const now = Date.now();
         if (now - lastSpaceAt >= SPACE_RETRY_MS) {
           lastSpaceAt = now;
