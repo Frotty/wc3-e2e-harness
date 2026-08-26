@@ -4,8 +4,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-// Per-machine path discovery (plan: "Environment Prerequisites"), ported from
-// Castle Fight's config auto-detection.
+// Per-machine Warcraft III path discovery.
 
 function findWc3Exe() {
   const candidates = [

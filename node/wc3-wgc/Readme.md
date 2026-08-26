@@ -82,8 +82,8 @@ Note: This script does not strictly check configuration here. You can practicall
 - `--no-launch`
 
 	Generate the `.wgc` (and copy the map) but do NOT launch Warcraft III. The caller launches
-	the generated `.wgc` itself. The Castle Fight e2e runner (`e2e/run-wc3-e2e.ts`) passes this so
-	it controls a single launched process — without it, `playtestWgc` would `os.execute` a second
+	the generated `.wgc` itself. The harness runner passes this so it controls a single launched
+	process — without it, `playtestWgc` would `os.execute` a second
 	WC3 client.
 
 - `--print`

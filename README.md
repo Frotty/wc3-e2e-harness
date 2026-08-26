@@ -8,7 +8,6 @@ This repository has two lockstep halves:
   controls the window, collects artifacts, and quits promptly after a verdict.
 
 For consumer setup, read [docs/AgentQuickstart.md](docs/AgentQuickstart.md).
-The longer design and protocol reference is [docs/SharedE2EHarnessPlan.md](docs/SharedE2EHarnessPlan.md).
 The same package also exposes a World Editor map-open probe for the Windows double-click workflow.
 
 The Node runner accepts an already-built map and explicit `projectId`, file-I/O ability id, and suite
@@ -28,3 +27,12 @@ npm test
 
 The native canary requires an interactive Windows desktop, Warcraft III, and a
 map built with `grill`; it cannot run in a headless CI worker.
+
+Build the canary in an isolated consumer/temp directory and pass that exact
+fresh map to the runner:
+
+```powershell
+node node/canary/run-canary.cjs --map=<freshly-built-map.w3x> --wgc-speed=12
+```
+
+The canary runner deliberately does not search `_build` for a “latest” map.

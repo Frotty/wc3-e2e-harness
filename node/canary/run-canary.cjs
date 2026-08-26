@@ -2,8 +2,8 @@
 
 /* Canary CLI over the production runner (src/runner/run.cjs).
  *
- *   node node/canary/run-canary.cjs [--suite=canary-pass] [--wgc-speed=0]
- *        [--map=<path>] [--runs=1] [--speeds=1,6,8] [--keep-open]
+ *   node node/canary/run-canary.cjs --map=<freshly-built-map.w3x>
+ *        [--suite=canary-pass] [--wgc-speed=0] [--runs=1] [--speeds=1,6,8] [--keep-open]
  *
  * --runs with --speeds cycles the speed matrix for the release-gate soak
  * (100 consecutive mixed-speed runs); it stops at the first failure.
@@ -33,16 +33,6 @@ function argumentValue(name, fallback = null) {
   return hit ? hit.slice(prefix.length) : fallback;
 }
 
-function latestBuiltMap() {
-  const buildDir = path.join(REPO_ROOT, "canary", "_build");
-  if (!fs.existsSync(buildDir)) return null;
-  const maps = fs.readdirSync(buildDir)
-    .filter((name) => /\.w3x$/i.test(name))
-    .map((name) => ({ full: path.join(buildDir, name), mtime: fs.statSync(path.join(buildDir, name)).mtimeMs }))
-    .sort((a, b) => b.mtime - a.mtime);
-  return maps[0]?.full ?? null;
-}
-
 async function main() {
   const suite = argumentValue("suite", "canary-pass");
   const expected = suite === "canary-fail" ? "FAIL" : "PASS";
@@ -55,9 +45,9 @@ async function main() {
     console.error(`Unknown canary suite: ${suite}`);
     return 2;
   }
-  const mapPath = argumentValue("map", latestBuiltMap());
+  const mapPath = argumentValue("map");
   if (!mapPath || !fs.existsSync(mapPath)) {
-    console.error("No built map found; run `grill build ExampleMap.w3x` or pass --map=<path>.");
+    console.error("A freshly built map is required; build it in an isolated consumer/temp directory and pass --map=<path>.");
     return 2;
   }
   const runs = Number(argumentValue("runs", "1"));
@@ -80,11 +70,10 @@ async function main() {
       artifactRoot: path.join(REPO_ROOT, "artifacts", "canary"),
       deadlines: expectStall ? { heartbeatStall: 10_000 } : {},
     });
+    const loadEvidence = result.readyObserved || result.loadedObserved || result.runningObserved;
     const ok = expectStall
       ? result.verdict === null && result.failure === "heartbeat-stall-after-suite-start"
-      : expectEmpty
-        ? result.verdict === "PASS"
-      : result.verdict === expected && result.readyObserved && result.runningObserved && result.heartbeats >= 1;
+      : result.verdict === expected && loadEvidence && (expectEmpty || (result.runningObserved && result.heartbeats >= 1));
     console.log(
       `verdict=${result.verdict ?? "none"} expected=${expectStall ? "stall-failure" : expected} ` +
         `heartbeats=${result.heartbeats} shutdown=${result.shutdown}` +
