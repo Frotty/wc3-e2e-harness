@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const crypto = require("node:crypto");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
@@ -53,7 +54,8 @@ async function runWorldEditorMap(options) {
   }
 
   const mapName = path.basename(resolvedMapPath, path.extname(resolvedMapPath));
-  const runId = `world-editor-${mapName}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+  const nonce = crypto.randomBytes(6).toString("hex");
+  const runId = `world-editor-${mapName}-${new Date().toISOString().replace(/[:.]/g, "-")}-${nonce}`;
   const artifacts = createArtifactWriter({ dir: path.join(artifactRoot, runId) });
   const releaseAgent = win32.acquireAgent();
   const existingPids = win32.listWorldEditorPids();
@@ -78,6 +80,7 @@ async function runWorldEditorMap(options) {
     launchMode,
     timeoutMs,
     runnerPid: process.pid,
+    nonce,
   });
   pruneArtifactRoot({ root: artifactRoot, currentDir: artifacts.dir });
 
@@ -127,6 +130,7 @@ async function runWorldEditorMap(options) {
       shutdown = "preserved-existing";
     }
     const full = artifacts.writeResult({ ...result, shutdown });
+    artifacts.complete();
     releaseAgent();
     return { ...full, exitCode: full.verdict === "PASS" ? 0 : 1, artifactDir: artifacts.dir };
   };
@@ -210,6 +214,7 @@ async function runWorldEditorMap(options) {
       map: resolvedMapPath,
       shutdown,
     });
+    artifacts.complete();
     releaseAgent();
     return { ...result, exitCode: reason.startsWith("unexpected") ? 2 : 1, artifactDir: artifacts.dir };
   }

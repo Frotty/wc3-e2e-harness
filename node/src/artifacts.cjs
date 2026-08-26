@@ -10,6 +10,8 @@ const path = require("node:path");
 function createArtifactWriter({ dir, maxTimelineBytes = 4 * 1024 * 1024 }) {
   fs.mkdirSync(dir, { recursive: true });
   const timelinePath = path.join(dir, "timeline.ndjson");
+  const activePath = path.join(dir, ".active");
+  fs.writeFileSync(activePath, `${process.pid}\n`, "utf8");
   let timelineBytes = 0;
   let droppedEvents = 0;
 
@@ -32,6 +34,13 @@ function createArtifactWriter({ dir, maxTimelineBytes = 4 * 1024 * 1024 }) {
       const full = { ...result, timeline: { bytes: timelineBytes, droppedEvents } };
       fs.writeFileSync(path.join(dir, "result.json"), JSON.stringify(full, null, 2) + "\n", "utf8");
       return full;
+    },
+    complete() {
+      try {
+        fs.unlinkSync(activePath);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
     },
     get droppedEvents() {
       return droppedEvents;
@@ -72,6 +81,19 @@ function pruneArtifactRoot({
     } catch {
       // A directory still being allocated is protected briefly; an old
       // incomplete directory is safe to reap on the next invocation.
+    }
+    if (fs.existsSync(path.join(dir, ".active"))) {
+      let activePid = run && Number.isInteger(run.runnerPid) ? run.runnerPid : null;
+      if (activePid === null) {
+        try {
+          const parsedPid = Number.parseInt(fs.readFileSync(path.join(dir, ".active"), "utf8"), 10);
+          if (Number.isInteger(parsedPid)) activePid = parsedPid;
+        } catch {
+          // Treat an unreadable marker as active until its stale age grace
+          // period has elapsed.
+        }
+      }
+      if (activePid === null || isPidRunning(activePid)) return false;
     }
     if (run && Number.isInteger(run.runnerPid) && isPidRunning(run.runnerPid)) return false;
     if (fs.existsSync(path.join(dir, "result.json"))) return true;

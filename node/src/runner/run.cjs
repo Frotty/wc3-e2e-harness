@@ -425,11 +425,13 @@ async function runSuite(options) {
     releaseRunLock();
     shutdown = "failed";
     const result = artifacts.writeResult({ ...summary(machine, seen, shutdown), failure: reason });
+    artifacts.complete();
     releaseAgent();
     return { ...result, exitCode: reason.startsWith("unexpected") ? 2 : 1, artifactDir: artifacts.dir };
   }
 
   const result = artifacts.writeResult(summary(machine, seen, shutdown));
+  artifacts.complete();
   removeOwnedArmedFile();
   releaseRunLock();
   releaseAgent();
