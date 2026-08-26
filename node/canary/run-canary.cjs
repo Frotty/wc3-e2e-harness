@@ -73,7 +73,8 @@ async function main() {
     const loadEvidence = result.readyObserved || result.loadedObserved || result.runningObserved;
     const ok = expectStall
       ? result.verdict === null && result.failure === "heartbeat-stall-after-suite-start"
-      : result.verdict === expected && loadEvidence && (expectEmpty || (result.runningObserved && result.heartbeats >= 1));
+      : result.verdict === expected &&
+        (expectEmpty || (loadEvidence && result.runningObserved && result.heartbeats >= 1));
     console.log(
       `verdict=${result.verdict ?? "none"} expected=${expectStall ? "stall-failure" : expected} ` +
         `heartbeats=${result.heartbeats} shutdown=${result.shutdown}` +
