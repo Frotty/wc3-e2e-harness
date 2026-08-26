@@ -24,6 +24,7 @@ const SUITE_TIMEOUTS_MS = {
   "canary-stall": 60_000,
   "canary-delay": 180_000,
   "canary-empty": 120_000,
+  "map-driven": 120_000,
 };
 
 function argumentValue(name, fallback = null) {

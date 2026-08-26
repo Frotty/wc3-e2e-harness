@@ -30,6 +30,7 @@ const F10_CYCLE_EVERY_MS = 8000;
 const MENU_SETTLE_MS = 800;
 const SCREEN_PROBE_MS = 1000;
 const MAP_LOAD_SETTLE_MS = 1000;
+const MAP_STARTUP_TIMEOUT_MS = 20_000;
 const QUIT_GRACE_MS = 3000;
 const QUIT_CLEANUP_MS = 2000;
 
@@ -51,6 +52,7 @@ async function runSuite(options) {
     pollMs = POLL_MS,
     screenProbeMs = SCREEN_PROBE_MS,
     mapLoadSettleMs = MAP_LOAD_SETTLE_MS,
+    startupTimeoutMs = MAP_STARTUP_TIMEOUT_MS,
     artifactRoot,
     deadlines = {},
     log = console.log,
@@ -104,6 +106,7 @@ async function runSuite(options) {
   let nextScreenProbeAt = 0;
   let screenProbeCount = 0;
   let loadedAt = null;
+  let loadingStartedAt = null;
   let pid;
   let existingWc3Pids = new Set();
   let launchSnapshotTaken = false;
@@ -164,9 +167,28 @@ async function runSuite(options) {
         machine.noteFailure(`screen-probe-failed: ${error.message}`);
       }
     }
+    if (mapStartupTimedOut({
+      startedAt: loadingStartedAt,
+      now: Date.now(),
+      timeoutMs: startupTimeoutMs,
+      ready: seen.ready,
+      loaded: seen.loaded,
+      running: seen.running,
+      verdict: machine.verdict,
+    })) {
+      const title = await win32.windowTitle(pid);
+      artifacts.appendTimeline({ at: Date.now(), event: "map-startup-timeout", windowTitle: title });
+      machine.noteFailure("map-startup-timeout");
+    }
     const tick = machine.tick();
     if (tick.failed) throw new RunFailure(tick.failed);
     if (tick.recover) {
+      // Once the map has published RUNNING, it has already crossed the
+      // loading/unpause boundary. Menu-key recovery at this point can close a
+      // user's game or hide a real suite failure. A suite stall is a terminal
+      // diagnostic condition; only use the keyboard recovery ladder while the
+      // runner is still trying to leave the loading screens.
+      if (seen.running) throw new RunFailure("heartbeat-stall-after-suite-start");
       log(`  recovery ladder (attempt ${tick.attempt}: ${tick.recover})`);
       await recoveryLadder();
     }
@@ -209,7 +231,7 @@ async function runSuite(options) {
     } else {
       launchArgs = ["-launch", "-windowmode", "windowed", "-nowfpause", "-loadfile", loadFile];
     }
-    artifacts.writeRun({ identity, map: mapPath, loadFile, wgcSpeed, suiteTimeoutMs });
+    artifacts.writeRun({ identity, map: mapPath, loadFile, wgcSpeed, suiteTimeoutMs, startupTimeoutMs });
     log(`Launching ${suiteId} (speed ${wgcSpeed > 0 ? `${wgcSpeed}x` : "1x"})...`);
     existingWc3Pids = win32.listWc3Pids();
     launchSnapshotTaken = true;
@@ -245,6 +267,7 @@ async function runSuite(options) {
 
     if (!machine.verdict) {
       machine.enter("LOADING");
+      loadingStartedAt = Date.now();
       while (!loadingComplete({
         ready: seen.ready,
         loaded: seen.loaded,
@@ -266,6 +289,7 @@ async function runSuite(options) {
       mapLoadOnly,
       loaded: seen.loaded,
       running: seen.running,
+      heartbeat: seen.heartbeat,
       verdict: machine.verdict,
     })) {
       machine.enter("UNPAUSE");
@@ -274,6 +298,7 @@ async function runSuite(options) {
         mapLoadOnly,
         loaded: seen.loaded,
         running: seen.running,
+        heartbeat: seen.heartbeat,
         verdict: machine.verdict,
       })) {
         const now = Date.now();
@@ -367,8 +392,16 @@ function loadingComplete({ ready, loaded, running, verdict }) {
   return Boolean(verdict) || ready || loaded || running;
 }
 
-function unpauseComplete({ mapLoadOnly, loaded, running, verdict }) {
-  return Boolean(verdict) || running || (mapLoadOnly && loaded);
+function mapStartupTimedOut({ startedAt, now, timeoutMs, ready, loaded, running, verdict }) {
+  return Number.isFinite(timeoutMs) && timeoutMs > 0 && startedAt !== null && now - startedAt >= timeoutMs
+    && !ready && !loaded && !running && !verdict;
+}
+
+function unpauseComplete({ mapLoadOnly, loaded, running, heartbeat = -1, verdict }) {
+  // E2E.startSuite emits an initial RUNNING snapshot before the game clock is
+  // necessarily advancing. Require one heartbeat for normal suites so a
+  // map-side timer-backed suite cannot remain paused behind a false positive.
+  return Boolean(verdict) || (mapLoadOnly && (loaded || running)) || (!mapLoadOnly && running && heartbeat > 0);
 }
 
 function enterMapLoadConfirmation(machine) {
@@ -382,6 +415,7 @@ module.exports = {
   runSuite,
   RunFailure,
   loadingComplete,
+  mapStartupTimedOut,
   unpauseComplete,
   enterMapLoadConfirmation,
 };

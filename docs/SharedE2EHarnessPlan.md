@@ -51,9 +51,8 @@ The harness targets exactly this environment; anything outside it is out of scop
   via configuration.
 - The runner may launch while Warcraft III is already running. It snapshots the existing process
   IDs, controls the new process it discovers, and preserves pre-existing sessions during cleanup.
-- Node.js LTS for the runner and the OCR sidecar (tesseract.js plus the English traineddata).
-  ImageMagick is optional preprocessing; when unavailable the sidecar falls back to raw frames with
-  a single warning.
+- Node.js LTS for the runner. Visual classifiers are optional consumer integrations and are not a
+  harness prerequisite.
 - The bundled `lua.exe` and `wgc-launch.lua` for WGC generation.
 - `CustomMapData` lives under whichever Documents directory Warcraft III actually uses, including
   OneDrive-redirected variants. The harness resolves candidates the same way replay detection does
@@ -71,7 +70,6 @@ flowchart LR
     WC3 --> Map
     Map -->|"READY, LOADED, heartbeat, RESULT"| Output["Preload output A/B"]
     Runner -->|"poll and validate"| Output
-    Runner --> OCR["Persistent Node OCR sidecar"]
     Runner --> Artifacts["Compact run artifacts"]
 ```
 
@@ -87,7 +85,7 @@ flowchart LR
 - Mandatory F10 open/close unpause sequence.
 - File protocol encoding, polling, validation, and cleanup.
 - Explicit lifecycle state machine and per-state deadlines.
-- OCR sidecar process management.
+- Optional screen-classifier integration for installations that need visual diagnostics.
 - Dialog recovery and failure evidence.
 - Immediate terminal-state handling and bounded clean quit.
 - Compact console output and structured artifacts.
@@ -142,7 +140,7 @@ Before Warcraft III starts, Node:
 - removes or invalidates stale launch/output files for that run location;
 - writes the one-shot `ARMED` launch file containing project id, build id, protocol version, suite
   id, run id, and nonce;
-- starts the persistent OCR sidecar;
+- starts the file watcher and Win32 control agent;
 - starts polling the output channel before launch.
 
 Suite ids are short, stable ASCII identifiers such as `bs-1` or `za-1`. The display name and timeout
@@ -171,7 +169,7 @@ After the loading screen is ready, Node:
 
 1. foregrounds the Warcraft III window;
 2. sends Space to leave the loading screen;
-3. waits for an in-game visual signal;
+3. waits for the map-side save-file signal;
 4. foregrounds the window again;
 5. always sends F10, waits for menu confirmation or a short settle interval, then sends F10 again;
 6. confirms that the expected game state is visible.
@@ -184,10 +182,11 @@ uses coordinate-based clicks.
 For a map-load-only probe, the runner waits for `READY`, drives the same Space/F10 unpause path, and
 stops after `LOADED` (or the immediately following `RUNNING` snapshot when the alternating output
 channel skips the intermediate frame). It then waits a one-second wall-clock settle interval and enters
-the normal quit path without requiring a suite heartbeat. Consumers may also provide a screen probe
-during `LOADING`/`UNPAUSE`; returning `main-menu` fails the run as `main-menu-before-map-load`
-immediately and stores the classifier screenshot. Without a visual probe, the preload channel cannot
-distinguish a rendered main menu from another map-load failure.
+the normal quit path without requiring a suite heartbeat. If no map-side signal appears within the
+20-second startup watchdog, the run fails as `map-startup-timeout`, records the current window title,
+and captures a screenshot. Consumers may also provide a screen probe during `LOADING`/`UNPAUSE` when a
+localized or modal-specific visual diagnosis is useful, but the classifier is optional and never the
+test authority.
 
 ### 4. Suite auto-start
 
@@ -430,14 +429,12 @@ short-circuits the remaining deadline.
   (`lua.exe wgc-launch.lua`) is a bounded one-shot subprocess, not a resident controller.
 - The Win32 agent is the only focus/keyboard/screenshot channel; coordinate-based clicks stay
   forbidden.
-- OCR runs in a persistent Node sidecar or worker so model startup is paid once.
 - Replay copying, screenshots, and artifact writes stay in Node.
 - The shared runner is plain Node (current LTS). The Castle Fight lifecycle modules are
   Deno-flavored TypeScript (`import.meta.dirname`, `Deno.exit`); they are ported to Node during
   migration, never imported across repos. Deno is not on the launch, OCR, protocol, result, or quit
   path.
 - Sidecar messages use request ids and explicit deadlines.
-- A crashed OCR sidecar is restarted once; repeated failure ends the run with evidence.
 - Runner exit codes are stable: `0` suite passed, `1` suite failed or produced no valid terminal
   snapshot, `2` infrastructure/configuration failure before a verdict was possible.
 

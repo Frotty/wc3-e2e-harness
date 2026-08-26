@@ -57,28 +57,24 @@ following `RUNNING` snapshot when the alternating output channel skips the inter
 waiting one wall-clock second and starting the normal bounded quit path. This avoids both false success
 while the map is still loading and deadlocking before the game-time load timer can fire.
 
-## Fast main-menu failure detection
+## Fast failure when the map never starts
 
-WGC can return to the Warcraft III main menu when a map or slot configuration cannot start. No map-side
-file signal exists in that case, so pass a screen classifier when you have OCR or an image classifier:
+If Warcraft III returns to its main menu, the map cannot emit a save-file signal. The harness therefore
+uses the strongest non-visual signal available: after entering `LOADING`, it waits only 20 seconds by
+default for `READY`, `LOADED`, or `RUNNING`. If none appears, it records `map-startup-timeout`, captures
+the current window title and failure screenshot, and begins bounded cleanup. This avoids waiting for the
+full suite timeout and does not send repeated F10/Escape input after a map-side `RUNNING` signal.
 
-```js
-const result = await runSuite({
-  // ...normal options...
-  mapLoadOnly: true,
-  screenProbe: async ({ phase, screenshotPath }) => {
-    // Replace this with the consumer's OCR/template classifier.
-    // Return exactly "main-menu" to abort; return "loading" or "unknown"
-    // for all other states.
-    return await classifyWarcraftScreen({ phase, screenshotPath });
-  },
-});
+Override the startup watchdog for unusually slow maps:
+
+```powershell
+node run-suite.cjs --project-id=my-project --ability-id=AM04 --suite=support-empty `
+  --map=_build/MyMap.w3x --startup-timeout-ms=45000
 ```
 
-The hook runs during `LOADING`/`UNPAUSE` at most once per second. A `main-menu` result fails with
-`main-menu-before-map-load`, records the probe in `timeline.ndjson`, preserves a screenshot, and quits
-without waiting for the loading deadline. If no classifier is available, the harness still fails safely
-on its normal loading deadline; it cannot infer a rendered main menu from the preload channel alone.
+The window title is diagnostic only; CPU usage and window appearance are not treated as proof because
+both can be idle during a legitimate load. A consumer may still provide `screenProbe` for a localized
+or modal-specific classifier, but OCR is optional and never replaces the save-file verdict.
 
 The output watcher checks every 250 ms for low terminal latency, but it only reads and parses an output
 file after its filesystem metadata changes. This keeps fast suites responsive without repeatedly

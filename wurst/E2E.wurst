@@ -94,6 +94,10 @@ public class E2E
 
 	/** Call from the adapter's earliest init hook, after registrations. */
 	static function bootstrap(string expectedProjectId)
+		// Keep the optional Lua bridge exports reachable even when a consumer
+		// invokes them dynamically from a map-side Lua chunk. They are no-ops
+		// before a valid launch has armed this runtime.
+		luaBridgeKeepAlive()
 		let launch = new File("wc3-e2e/" + expectedProjectId + "/armed.pld")
 			.readAsString(GetLocalPlayer())
 		let frame = decodeFrame(launch)
@@ -138,6 +142,42 @@ public class E2E
 			if failedIdCount < MAX_FAILED_IDS
 				failedIds += (failedIdCount > 0 ? "," : "") + id
 				failedIdCount++
+
+	/** Generic Lua-facing wrappers for map-side suites. */
+	static function luaAssertTrue(string id, boolean condition)
+		assertTrue(id, condition)
+
+	static function luaRecordEvent(string id)
+		recordEvent(id)
+
+	static function luaRecordMetric(string id, real value)
+		recordMetric(id, value)
+
+	static function luaPulse()
+		pulse()
+
+	static function luaFinish()
+		if not active or finished
+			return
+		// Serialize after the calling Lua timer returns. This avoids crossing
+		// directly from a long-running Lua callback into the Wurst result
+		// serializer while preserving the same terminal verdict.
+		doAfter(0.) ->
+			finish()
+
+	private static function luaBridgeKeepAlive()
+		luaAssertTrue("", true)
+		luaRecordEvent("")
+		luaRecordMetric("", 0.)
+		luaPulse()
+		luaFinish()
+
+	/** Publishes progress for a deliberately synchronous suite body. */
+	static function pulse()
+		if not active or finished
+			return
+		heartbeatCount++
+		emit("RUNNING", "{}")
 
 	// "event" itself collides with the JASS native type name.
 	static function recordEvent(string id)
