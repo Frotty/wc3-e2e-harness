@@ -19,7 +19,8 @@ particular map repository.
 
 - Never build or stage a consumer fixture into this shared checkout's `canary/` directory.
 - Never launch a cached or guessed map. Build in a unique per-run directory and verify the output
-  contains the expected fixture markers before invoking the runner.
+  contains the expected fixture markers before invoking the runner. The generic canary CLI also
+  requires an independently captured `--map-sha1` for the exact build output.
 - Every runner invocation gets a unique `runId`, nonce, and artifact directory. The channel namespace
   is exclusive per `projectId`: a second same-project run fails before touching the first run's files;
   different project IDs can run concurrently.

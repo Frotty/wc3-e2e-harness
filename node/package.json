@@ -1,7 +1,7 @@
 {
   "name": "wc3-e2e-harness",
   "version": "0.1.0",
-  "description": "Shared Warcraft III E2E harness: Node runner and file protocol (see docs/SharedE2EHarnessPlan.md)",
+  "description": "Shared Warcraft III E2E harness: Node runner and save-file protocol",
   "main": "index.cjs",
   "bin": {
     "wc3-e2e-run": "run-suite.cjs"

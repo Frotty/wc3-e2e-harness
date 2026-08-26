@@ -2,8 +2,8 @@
 
 /* Canary CLI over the production runner (src/runner/run.cjs).
  *
- *   node node/canary/run-canary.cjs [--suite=canary-pass] [--wgc-speed=0]
- *        [--map=<path>] [--runs=1] [--speeds=1,6,8] [--keep-open]
+ *   node node/canary/run-canary.cjs --map=<freshly-built-map.w3x> --map-sha1=<build-output-sha1>
+ *        [--suite=canary-pass] [--wgc-speed=0] [--runs=1] [--speeds=1,6,8] [--keep-open]
  *
  * --runs with --speeds cycles the speed matrix for the release-gate soak
  * (100 consecutive mixed-speed runs); it stops at the first failure.
@@ -11,13 +11,15 @@
  */
 
 const fs = require("node:fs");
+const crypto = require("node:crypto");
+const os = require("node:os");
 const path = require("node:path");
 
 const { runSuite } = require("../src/runner/run.cjs");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const PROJECT_ID = "canary";
-const ABILITY_ID = "E2EF"; // wurst/FileIO_config.wurst
+const ABILITY_ID = "$wsl"; // stdlib FileIO default; canary has no custom override
 const SUITE_TIMEOUTS_MS = {
   "canary-pass": 120_000,
   "canary-fail": 120_000,
@@ -33,16 +35,6 @@ function argumentValue(name, fallback = null) {
   return hit ? hit.slice(prefix.length) : fallback;
 }
 
-function latestBuiltMap() {
-  const buildDir = path.join(REPO_ROOT, "canary", "_build");
-  if (!fs.existsSync(buildDir)) return null;
-  const maps = fs.readdirSync(buildDir)
-    .filter((name) => /\.w3x$/i.test(name))
-    .map((name) => ({ full: path.join(buildDir, name), mtime: fs.statSync(path.join(buildDir, name)).mtimeMs }))
-    .sort((a, b) => b.mtime - a.mtime);
-  return maps[0]?.full ?? null;
-}
-
 async function main() {
   const suite = argumentValue("suite", "canary-pass");
   const expected = suite === "canary-fail" ? "FAIL" : "PASS";
@@ -55,9 +47,22 @@ async function main() {
     console.error(`Unknown canary suite: ${suite}`);
     return 2;
   }
-  const mapPath = argumentValue("map", latestBuiltMap());
+  const mapPath = argumentValue("map");
   if (!mapPath || !fs.existsSync(mapPath)) {
-    console.error("No built map found; run `grill build ExampleMap.w3x` or pass --map=<path>.");
+    console.error("A freshly built map is required; build it in an isolated consumer/temp directory and pass --map=<path>.");
+    return 2;
+  }
+  const expectedMapSha1 = argumentValue("map-sha1");
+  if (!expectedMapSha1 || !/^[0-9a-f]{40}$/i.test(expectedMapSha1)) {
+    console.error("An independently captured SHA-1 for the fresh build output is required; pass --map-sha1=<40-hex-digits>.");
+    return 2;
+  }
+  // Read and hash the bytes once, then run every iteration from our own copy.
+  // This prevents a replaced input path from changing the map during a soak.
+  const mapBytes = fs.readFileSync(mapPath);
+  const actualMapSha1 = crypto.createHash("sha1").update(mapBytes).digest("hex");
+  if (actualMapSha1 !== expectedMapSha1.toLowerCase()) {
+    console.error(`Map SHA-1 mismatch: expected ${expectedMapSha1.toLowerCase()}, got ${actualMapSha1}. Refusing to launch a stale or wrong map.`);
     return 2;
   }
   const runs = Number(argumentValue("runs", "1"));
@@ -66,34 +71,42 @@ async function main() {
     .map((s) => Number(s.trim()));
   const keepOpen = process.argv.includes("--keep-open");
 
-  for (let i = 0; i < runs; i++) {
-    const speed = speeds[i % speeds.length];
-    if (runs > 1) console.log(`--- run ${i + 1}/${runs} (${speed > 1 ? `${speed}x` : "1x"}) ---`);
-    const result = await runSuite({
-      projectId: PROJECT_ID,
-      abilityId: ABILITY_ID,
-      suiteId: suite,
-      mapPath: path.resolve(mapPath),
-      suiteTimeoutMs: timeoutMs,
-      wgcSpeed: speed > 1 ? speed : 0,
-      keepOpen,
-      artifactRoot: path.join(REPO_ROOT, "artifacts", "canary"),
-      deadlines: expectStall ? { heartbeatStall: 10_000 } : {},
-    });
-    const ok = expectStall
-      ? result.verdict === null && result.failure === "heartbeat-stall-after-suite-start"
-      : expectEmpty
-        ? result.verdict === "PASS"
-      : result.verdict === expected && result.readyObserved && result.runningObserved && result.heartbeats >= 1;
-    console.log(
-      `verdict=${result.verdict ?? "none"} expected=${expectStall ? "stall-failure" : expected} ` +
-        `heartbeats=${result.heartbeats} shutdown=${result.shutdown}` +
-        `${result.failure ? ` failure=${result.failure}` : ""}`,
-    );
-    console.log(`${ok ? "CANARY PASS" : "CANARY FAIL"} (${suite})  artifacts: ${result.artifactDir}`);
-    if (!ok) return 1;
+  let verifiedMapDir = null;
+  try {
+    verifiedMapDir = fs.mkdtempSync(path.join(os.tmpdir(), "wc3-e2e-canary-map-"));
+    const verifiedMapPath = path.join(verifiedMapDir, path.basename(mapPath));
+    fs.writeFileSync(verifiedMapPath, mapBytes);
+    for (let i = 0; i < runs; i++) {
+      const speed = speeds[i % speeds.length];
+      if (runs > 1) console.log(`--- run ${i + 1}/${runs} (${speed > 1 ? `${speed}x` : "1x"}) ---`);
+      const result = await runSuite({
+        projectId: PROJECT_ID,
+        abilityId: ABILITY_ID,
+        suiteId: suite,
+        mapPath: verifiedMapPath,
+        suiteTimeoutMs: timeoutMs,
+        wgcSpeed: speed > 1 ? speed : 0,
+        keepOpen,
+        artifactRoot: path.join(REPO_ROOT, "artifacts", "canary"),
+        deadlines: expectStall ? { heartbeatStall: 10_000 } : {},
+      });
+      const loadEvidence = result.readyObserved || result.loadedObserved || result.runningObserved;
+      const ok = expectStall
+        ? result.verdict === null && result.failure === "heartbeat-stall-after-suite-start"
+        : result.verdict === expected &&
+          (expectEmpty || (loadEvidence && result.runningObserved && result.heartbeats >= 1));
+      console.log(
+        `verdict=${result.verdict ?? "none"} expected=${expectStall ? "stall-failure" : expected} ` +
+          `heartbeats=${result.heartbeats} shutdown=${result.shutdown}` +
+          `${result.failure ? ` failure=${result.failure}` : ""}`,
+      );
+      console.log(`${ok ? "CANARY PASS" : "CANARY FAIL"} (${suite})  artifacts: ${result.artifactDir}`);
+      if (!ok) return 1;
+    }
+    return 0;
+  } finally {
+    if (verifiedMapDir) fs.rmSync(verifiedMapDir, { recursive: true, force: true });
   }
-  return 0;
 }
 
 main().then(

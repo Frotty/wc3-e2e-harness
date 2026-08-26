@@ -4,7 +4,7 @@ import E2EProtocol
 import ClosureTimers
 import LinkedList
 
-/*  Shared WC3 E2E harness — map-side runtime (docs/SharedE2EHarnessPlan.md).
+/*  Shared WC3 E2E harness — generic map-side runtime.
 
 	The Node runner writes a one-shot ARMED launch file (frame-wrapped
 	key=value body) into CustomMapData/wc3-e2e/<projectId>/ before Warcraft
@@ -69,6 +69,7 @@ public class E2E
 	private static constant metrics = new LinkedList<Metric>()
 	private static var active = false
 	private static var finished = false
+	private static var finishRequested = false
 	private static var heartbeatsStopped = false
 	private static string projectId = ""
 	private static string buildId = ""
@@ -133,7 +134,7 @@ public class E2E
 				startSuite()
 
 	static function assertTrue(string id, boolean condition)
-		if not active or finished
+		if not active or finished or finishRequested
 			return
 		if condition
 			assertsPassed++
@@ -159,11 +160,10 @@ public class E2E
 	static function luaFinish()
 		if not active or finished
 			return
-		// Serialize after the calling Lua timer returns. This avoids crossing
-		// directly from a long-running Lua callback into the Wurst result
-		// serializer while preserving the same terminal verdict.
-		doAfter(0.) ->
-			finish()
+		// Lua calls this from a long-running timer callback. Only request the
+		// terminal result here; the Wurst heartbeat callback below performs the
+		// file write after the Lua callback has returned.
+		finishRequested = true
 
 	private static function luaBridgeKeepAlive()
 		luaAssertTrue("", true)
@@ -174,14 +174,14 @@ public class E2E
 
 	/** Publishes progress for a deliberately synchronous suite body. */
 	static function pulse()
-		if not active or finished
+		if not active or finished or finishRequested
 			return
 		heartbeatCount++
 		emit("RUNNING", "{}")
 
 	// "event" itself collides with the JASS native type name.
 	static function recordEvent(string id)
-		if not active or finished
+		if not active or finished or finishRequested
 			return
 		for counter in events
 			if counter.id == id
@@ -198,7 +198,7 @@ public class E2E
 		Use this instead of baking a number into an event id. A metric keeps one stable name across runs, so
 		results can be compared run to run, and it costs one slot no matter how much the value moves. */
 	static function recordMetric(string id, real value)
-		if not active or finished
+		if not active or finished or finishRequested
 			return
 		for metric in metrics
 			if metric.id == id
@@ -235,6 +235,9 @@ public class E2E
 		emit("RUNNING", "{}")
 		doPeriodically(HEARTBEAT_INTERVAL) cb ->
 			if finished
+				destroy cb
+			else if finishRequested
+				finish()
 				destroy cb
 			else
 				gameSeconds += HEARTBEAT_INTERVAL

@@ -4,8 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
-/* Win32 layer, ported from Castle Fight's proven Deno modules
- * (win32-agent.ts / input-capture.ts): process liveness via tasklist (a
+/* Win32 layer: process liveness via tasklist (a
  * kill-signal probe needs terminate rights Battle.net-authenticated WC3
  * denies), pid discovery with the -launch re-exec quirk handled, and the
  * persistent PowerShell agent (win32-agent.ps1) serving foreground/key/
