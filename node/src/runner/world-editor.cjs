@@ -4,7 +4,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
 
-const { createArtifactWriter } = require("../artifacts.cjs");
+const { createArtifactWriter, pruneArtifactRoot } = require("../artifacts.cjs");
 const { findWc3Exe, findWorldEditorExe } = require("./paths.cjs");
 const win32 = require("./win32.cjs");
 
@@ -77,7 +77,9 @@ async function runWorldEditorMap(options) {
     editorExe,
     launchMode,
     timeoutMs,
+    runnerPid: process.pid,
   });
+  pruneArtifactRoot({ root: artifactRoot, currentDir: artifacts.dir });
 
   const launch = () => {
     const child = launchMode === "association"

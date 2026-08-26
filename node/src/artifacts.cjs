@@ -39,4 +39,66 @@ function createArtifactWriter({ dir, maxTimelineBytes = 4 * 1024 * 1024 }) {
   };
 }
 
-module.exports = { createArtifactWriter };
+function pruneArtifactRoot({
+  root,
+  keep = 20,
+  currentDir = null,
+  isPidRunning = pidIsRunning,
+  now = Date.now(),
+  staleIncompleteMs = 60 * 60 * 1000,
+}) {
+  if (!root || !Number.isInteger(keep) || keep < 0 || !fs.existsSync(root)) return 0;
+  const current = currentDir ? path.resolve(currentDir) : null;
+  const entries = fs.readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const dir = path.join(root, entry.name);
+      let mtimeMs = 0;
+      try {
+        mtimeMs = fs.statSync(dir).mtimeMs;
+      } catch {
+        return null;
+      }
+      return { dir, mtimeMs };
+    })
+    .filter(Boolean)
+    .filter(({ dir }) => dir !== current)
+    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+  const removable = entries.filter(({ dir, mtimeMs }) => {
+    const resultPath = path.join(dir, "result.json");
+    if (fs.existsSync(resultPath)) return true;
+    let run = null;
+    try {
+      run = JSON.parse(fs.readFileSync(path.join(dir, "run.json"), "utf8"));
+    } catch {
+      // A directory still being allocated is protected briefly; an old
+      // incomplete directory is safe to reap on the next invocation.
+    }
+    if (run && Number.isInteger(run.runnerPid) && isPidRunning(run.runnerPid)) return false;
+    return now - mtimeMs >= staleIncompleteMs;
+  });
+
+  let removed = 0;
+  for (const { dir } of removable.slice(keep)) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      removed++;
+    } catch {
+      // Best-effort retention; never hide the run itself because an old
+      // diagnostic directory is locked or disappears concurrently.
+    }
+  }
+  return removed;
+}
+
+function pidIsRunning(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
+  }
+}
+
+module.exports = { createArtifactWriter, pruneArtifactRoot };

@@ -12,7 +12,7 @@ const { createChannelReader } = require("../protocol/channel.cjs");
 const { createModifiedFileReader } = require("../protocol/modified-file.cjs");
 const { createLifecycle } = require("../lifecycle/machine.cjs");
 const { createRealClock } = require("../lifecycle/clock.cjs");
-const { createArtifactWriter } = require("../artifacts.cjs");
+const { createArtifactWriter, pruneArtifactRoot } = require("../artifacts.cjs");
 const { findWc3Exe, wc3RootFor, findCustomMapData } = require("./paths.cjs");
 const { createWgc, sha1File } = require("./wgc.cjs");
 const win32 = require("./win32.cjs");
@@ -35,6 +35,7 @@ const MAP_STARTUP_TIMEOUT_MS = 20_000;
 const RUN_LOCK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const QUIT_GRACE_MS = 3000;
 const QUIT_CLEANUP_MS = 2000;
+const FAILURE_SCREENSHOT_TIMEOUT_MS = 2000;
 
 class RunFailure extends Error {}
 
@@ -264,7 +265,8 @@ async function runSuite(options) {
     } else {
       launchArgs = ["-launch", "-windowmode", "windowed", "-nowfpause", "-loadfile", loadFile];
     }
-    artifacts.writeRun({ identity, map: mapPath, loadFile, wgcSpeed, suiteTimeoutMs, startupTimeoutMs });
+    artifacts.writeRun({ identity, map: mapPath, loadFile, wgcSpeed, suiteTimeoutMs, startupTimeoutMs, runnerPid: process.pid });
+    pruneArtifactRoot({ root: artifactRoot, currentDir: artifacts.dir });
     log(`Launching ${suiteId} (speed ${wgcSpeed > 0 ? `${wgcSpeed}x` : "1x"})...`);
     releaseLaunchLock = await acquireRunLockEventually(path.join(customMapData, "wc3-e2e", "launch.lock"), {
       pid: process.pid,
@@ -408,8 +410,12 @@ async function runSuite(options) {
     }
   } catch (error) {
     const reason = error instanceof RunFailure ? error.message : `unexpected: ${error.message}`;
-    if (pid && win32.isProcessRunning(pid)) {
-      await win32.screenshot(pid, path.join(artifacts.dir, "failure.png"));
+    if (pid && win32.isProcessRunning(pid) && reason !== "map-startup-timeout") {
+      await withTimeout(
+        win32.screenshot(pid, path.join(artifacts.dir, "failure.png")),
+        FAILURE_SCREENSHOT_TIMEOUT_MS,
+        "failure-screenshot-timeout",
+      ).catch(() => {});
     }
     releaseLaunchLock();
     // A failed run must not leave a live map writer behind after releasing
