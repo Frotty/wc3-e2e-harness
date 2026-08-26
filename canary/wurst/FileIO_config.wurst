@@ -1,6 +1,0 @@
-package FileIO_config
-
-/* The bundled canary pins the stdlib FileIO carrier ability to a stable rawcode.
-   Consumer maps must provide their own FileIO_config override and pass the
-   matching abilityId to the generic Node runner. */
-@config public constant FILE_IO_ABIL_ID = 'E2EF'

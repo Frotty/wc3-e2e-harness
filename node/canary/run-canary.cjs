@@ -17,7 +17,7 @@ const { runSuite } = require("../src/runner/run.cjs");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const PROJECT_ID = "canary";
-const ABILITY_ID = "E2EF"; // wurst/FileIO_config.wurst
+const ABILITY_ID = "$wsl"; // stdlib FileIO default; canary has no custom override
 const SUITE_TIMEOUTS_MS = {
   "canary-pass": 120_000,
   "canary-fail": 120_000,
