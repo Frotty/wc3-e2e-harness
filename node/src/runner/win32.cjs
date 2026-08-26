@@ -239,6 +239,18 @@ async function killPidsExcept(listPids, preservePids, timeoutMs = 10_000) {
   return [...listPids()].every((pid) => preservePids.has(pid));
 }
 
+async function killSpecificPids(pids, timeoutMs = 10_000) {
+  const ownedPids = [...new Set(pids)].filter(Boolean);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const alive = ownedPids.filter((pid) => isProcessRunning(pid));
+    if (alive.length === 0) return true;
+    for (const pid of alive) killProcess(pid);
+    await sleep(500);
+  }
+  return ownedPids.every((pid) => !isProcessRunning(pid));
+}
+
 function pidsNotIn(pids, preservePids) {
   return [...pids].filter((pid) => !preservePids.has(pid));
 }
@@ -286,6 +298,7 @@ module.exports = {
   screenshot,
   killAllWc3,
   killWc3PidsExcept,
+  killSpecificPids,
   killPidsExcept,
   pidsNotIn,
   windowTitle,

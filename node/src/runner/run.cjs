@@ -74,8 +74,8 @@ async function runSuite(options) {
   const customMapData = options.customMapData ?? findCustomMapData();
   if (!customMapData) throw new RunFailure("CustomMapData directory could not be resolved");
   if (!fs.existsSync(mapPath)) throw new RunFailure(`Map not found: ${mapPath}`);
-  const runId = `${suiteId}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   const nonce = crypto.randomBytes(6).toString("hex");
+  const runId = `${suiteId}-${new Date().toISOString().replace(/[:.]/g, "-")}-${nonce}`;
   const buildId = sha1File(mapPath).slice(0, 10);
   const identity = makeIdentity({ projectId, buildId, runId, nonce, suiteId });
   const artifacts = createArtifactWriter({ dir: path.join(artifactRoot, runId) });
@@ -107,6 +107,7 @@ async function runSuite(options) {
   let loadingStartedAt = null;
   let pid;
   let existingWc3Pids = new Set();
+  const ownedWc3Pids = new Set();
   let launchSnapshotTaken = false;
   let shutdown = "none";
   let releaseRunLock = () => {};
@@ -252,11 +253,11 @@ async function runSuite(options) {
     }
     artifacts.writeRun({ identity, map: mapPath, loadFile, wgcSpeed, suiteTimeoutMs, startupTimeoutMs });
     log(`Launching ${suiteId} (speed ${wgcSpeed > 0 ? `${wgcSpeed}x` : "1x"})...`);
-    releaseLaunchLock = acquireRunLock(path.join(customMapData, "wc3-e2e", "launch.lock"), {
+    releaseLaunchLock = await acquireRunLockEventually(path.join(customMapData, "wc3-e2e", "launch.lock"), {
       pid: process.pid,
       startedAt: Date.now(),
       runId,
-    });
+    }, 30_000);
     existingWc3Pids = win32.listWc3Pids();
     launchSnapshotTaken = true;
     spawn("cmd.exe", ["/d", "/s", "/c", "start", "", wc3Exe, ...launchArgs], {
@@ -269,6 +270,7 @@ async function runSuite(options) {
     releaseLaunchLock();
     releaseLaunchLock = () => {};
     if (!pid) throw new RunFailure("wc3-process-did-not-appear");
+    ownedWc3Pids.add(pid);
     log(`  pid ${pid}`);
 
     // --- Window ------------------------------------------------------------
@@ -387,7 +389,7 @@ async function runSuite(options) {
       shutdown = "left-open";
     } else {
       shutdown = win32.isProcessRunning(pid) ? "forced" : "clean";
-      await win32.killWc3PidsExcept(existingWc3Pids, QUIT_CLEANUP_MS);
+      await win32.killSpecificPids(ownedWc3Pids, QUIT_CLEANUP_MS);
     }
   } catch (error) {
     const reason = error instanceof RunFailure ? error.message : `unexpected: ${error.message}`;
@@ -397,7 +399,7 @@ async function runSuite(options) {
     releaseLaunchLock();
     // A failed run must not leave a live map writer behind after releasing
     // either lock, even when keepOpen was requested for successful runs.
-    if (launchSnapshotTaken) await win32.killWc3PidsExcept(existingWc3Pids, QUIT_CLEANUP_MS);
+    if (launchSnapshotTaken) await win32.killSpecificPids(ownedWc3Pids, QUIT_CLEANUP_MS);
     removeOwnedArmedFile();
     releaseRunLock();
     shutdown = "failed";
@@ -541,5 +543,19 @@ function processAlive(pid) {
     return true;
   } catch {
     return false;
+  }
+}
+
+async function acquireRunLockEventually(lockPath, metadata, waitMs) {
+  const deadline = Date.now() + waitMs;
+  while (true) {
+    try {
+      return acquireRunLock(lockPath, metadata);
+    } catch (error) {
+      if (!(error instanceof RunFailure)
+        || !error.message.startsWith("project-run-already-active:")
+        || Date.now() >= deadline) throw error;
+      await win32.sleep(Math.min(250, Math.max(1, deadline - Date.now())));
+    }
   }
 }
