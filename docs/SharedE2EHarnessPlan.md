@@ -137,7 +137,7 @@ Before Warcraft III starts, Node:
 
 - snapshots the Warcraft III process IDs already present; this is the ownership boundary for cleanup;
 - creates a unique run id and random nonce;
-- removes or invalidates stale launch/output files for that run location;
+- acquires an exclusive lock for the project channel and removes stale output files only after the lock;
 - writes the one-shot `ARMED` launch file containing project id, build id, protocol version, suite
   id, run id, and nonce;
 - starts the file watcher and Win32 control agent;

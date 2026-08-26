@@ -1,12 +1,17 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
 const { test } = require("node:test");
 
 const {
   enterMapLoadConfirmation,
+  acquireRunLock,
   loadingComplete,
   mapStartupTimedOut,
+  terminalSnapshotAllowed,
   unpauseComplete,
 } = require("../src/runner/run.cjs");
 const { createLifecycle } = require("../src/lifecycle/machine.cjs");
@@ -22,6 +27,29 @@ test("map startup watchdog fails only before any map-side evidence", () => {
   assert.equal(mapStartupTimedOut({ startedAt: 1_000, now: 21_000, timeoutMs: 20_000, ready: true, loaded: false, running: false, verdict: null }), false);
   assert.equal(mapStartupTimedOut({ startedAt: null, now: 21_000, timeoutMs: 20_000, ready: false, loaded: false, running: false, verdict: null }), false);
   assert.equal(mapStartupTimedOut({ startedAt: 1_000, now: 21_000, timeoutMs: null, ready: false, loaded: false, running: false, verdict: null }), false);
+});
+
+test("map-load-only does not accept PASS without load evidence", () => {
+  assert.equal(terminalSnapshotAllowed({ mapLoadOnly: true, state: "PASS", loaded: false, running: false }), false);
+  assert.equal(terminalSnapshotAllowed({ mapLoadOnly: true, state: "PASS", loaded: true, running: false }), true);
+  assert.equal(terminalSnapshotAllowed({ mapLoadOnly: true, state: "PASS", loaded: false, running: true }), true);
+  assert.equal(terminalSnapshotAllowed({ mapLoadOnly: true, state: "FAIL", loaded: false, running: false }), true);
+  assert.equal(terminalSnapshotAllowed({ mapLoadOnly: false, state: "PASS", loaded: false, running: false }), true);
+});
+
+test("same project channel cannot be claimed twice", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wc3-e2e-lock-test-"));
+  const lockPath = path.join(root, "run.lock");
+  const release = acquireRunLock(lockPath, { pid: process.pid, startedAt: Date.now(), runId: "first" });
+  try {
+    assert.throws(
+      () => acquireRunLock(lockPath, { pid: process.pid, startedAt: Date.now(), runId: "second" }),
+      /project-run-already-active/,
+    );
+  } finally {
+    release();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("map-load-only unpauses until LOADED or its following RUNNING signal", () => {

@@ -78,7 +78,9 @@ or modal-specific classifier, but OCR is optional and never replaces the save-fi
 
 The output watcher checks every 250 ms for low terminal latency, but it only reads and parses an output
 file after its filesystem metadata changes. This keeps fast suites responsive without repeatedly
-processing the same savefile.
+processing the same savefile. A project namespace is locked for the duration of a run, so concurrent
+different projects are safe while a duplicate run for the same `projectId` fails immediately instead
+of overwriting its armed/output files.
 
 ## Opening a map in World Editor
 

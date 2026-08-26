@@ -29,8 +29,10 @@ const SPACE_RETRY_MS = 2500;
 const F10_CYCLE_EVERY_MS = 8000;
 const MENU_SETTLE_MS = 800;
 const SCREEN_PROBE_MS = 1000;
+const SCREEN_PROBE_TIMEOUT_MS = 5000;
 const MAP_LOAD_SETTLE_MS = 1000;
 const MAP_STARTUP_TIMEOUT_MS = 20_000;
+const RUN_LOCK_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const QUIT_GRACE_MS = 3000;
 const QUIT_CLEANUP_MS = 2000;
 
@@ -51,6 +53,7 @@ async function runSuite(options) {
     screenProbe = null,
     pollMs = POLL_MS,
     screenProbeMs = SCREEN_PROBE_MS,
+    screenProbeTimeoutMs = SCREEN_PROBE_TIMEOUT_MS,
     mapLoadSettleMs = MAP_LOAD_SETTLE_MS,
     startupTimeoutMs = MAP_STARTUP_TIMEOUT_MS,
     artifactRoot,
@@ -80,14 +83,9 @@ async function runSuite(options) {
   const channelDir = path.join(customMapData, "wc3-e2e", projectId);
   const outputs = [path.join(channelDir, "output-a.pld"), path.join(channelDir, "output-b.pld")];
   const armedPath = path.join(channelDir, "armed.pld");
-  for (const stale of outputs) {
-    if (fs.existsSync(stale)) fs.unlinkSync(stale);
-  }
   const armedBody =
     `armed;v=${identity.v};projectId=${projectId};buildId=${buildId};runId=${runId};nonce=${nonce};suiteId=${suiteId}`;
   const armedText = encodeFileText(abilityId, encodeFrame(armedBody));
-  fs.mkdirSync(channelDir, { recursive: true });
-  fs.writeFileSync(armedPath, armedText, "utf8");
   const removeOwnedArmedFile = () => {
     try {
       if (fs.existsSync(armedPath) && fs.readFileSync(armedPath, "utf8") === armedText) fs.unlinkSync(armedPath);
@@ -111,6 +109,7 @@ async function runSuite(options) {
   let existingWc3Pids = new Set();
   let launchSnapshotTaken = false;
   let shutdown = "none";
+  let releaseRunLock = () => {};
 
   // One shared observation step for every phase.
   const step = async () => {
@@ -142,7 +141,16 @@ async function runSuite(options) {
         machine.noteHeartbeat(snap.heartbeat);
       } else {
         seen.terminalPayload = snap.payload;
-        machine.noteTerminal(snap.state);
+        if (terminalSnapshotAllowed({
+          mapLoadOnly,
+          state: snap.state,
+          loaded: seen.loaded,
+          running: seen.running,
+        })) {
+          machine.noteTerminal(snap.state);
+        } else {
+          machine.noteFailure("pass-before-map-load");
+        }
         log(`  ${snap.state} (seq ${snap.seq})`);
       }
     }
@@ -153,12 +161,12 @@ async function runSuite(options) {
       const screenshotPath = path.join(artifacts.dir, "screens", `screen-${probeId}.png`);
       const capturedPath = await win32.screenshot(pid, screenshotPath);
       try {
-        const screen = await screenProbe({
+        const screen = await withTimeout(screenProbe({
           pid,
           phase: machine.state,
           screenshotPath: capturedPath,
           artifactDir: artifacts.dir,
-        });
+        }), screenProbeTimeoutMs, "screen-probe-timeout");
         artifacts.appendTimeline({ at: Date.now(), event: "screen-probe", phase: machine.state, result: screen ?? "unknown" });
         if (screen === "main-menu") {
           machine.noteFailure("main-menu-before-map-load");
@@ -212,6 +220,16 @@ async function runSuite(options) {
   };
 
   try {
+    releaseRunLock = acquireRunLock(path.join(channelDir, "run.lock"), {
+      pid: process.pid,
+      startedAt: Date.now(),
+      runId,
+    });
+    fs.mkdirSync(channelDir, { recursive: true });
+    for (const stale of outputs) {
+      if (fs.existsSync(stale)) fs.unlinkSync(stale);
+    }
+    fs.writeFileSync(armedPath, armedText, "utf8");
     // --- Launch ------------------------------------------------------------
     machine.enter("LAUNCH");
     let loadFile = mapPath;
@@ -370,6 +388,7 @@ async function runSuite(options) {
     }
     if (!keepOpen && launchSnapshotTaken) await win32.killWc3PidsExcept(existingWc3Pids, QUIT_CLEANUP_MS);
     removeOwnedArmedFile();
+    releaseRunLock();
     shutdown = "failed";
     const result = artifacts.writeResult({ ...summary(machine, seen, shutdown), failure: reason });
     win32.agent.shutdown();
@@ -378,6 +397,7 @@ async function runSuite(options) {
 
   const result = artifacts.writeResult(summary(machine, seen, shutdown));
   removeOwnedArmedFile();
+  releaseRunLock();
   win32.agent.shutdown();
   return { ...result, exitCode: result.verdict === "PASS" ? 0 : 1, artifactDir: artifacts.dir };
 }
@@ -404,6 +424,10 @@ function mapStartupTimedOut({ startedAt, now, timeoutMs, ready, loaded, running,
     && !ready && !loaded && !running && !verdict;
 }
 
+function terminalSnapshotAllowed({ mapLoadOnly, state, loaded, running }) {
+  return !mapLoadOnly || state !== "PASS" || loaded || running;
+}
+
 function unpauseComplete({ mapLoadOnly, loaded, running, heartbeat = -1, verdict }) {
   // E2E.startSuite emits an initial RUNNING snapshot before the game clock is
   // necessarily advancing. Require one heartbeat for normal suites so a
@@ -419,10 +443,74 @@ function enterMapLoadConfirmation(machine) {
 }
 
 module.exports = {
+  acquireRunLock,
   runSuite,
   RunFailure,
   loadingComplete,
   mapStartupTimedOut,
+  terminalSnapshotAllowed,
   unpauseComplete,
   enterMapLoadConfirmation,
 };
+
+function withTimeout(promise, timeoutMs, message) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+function acquireRunLock(lockPath, metadata) {
+  const lockBody = JSON.stringify(metadata);
+  fs.mkdirSync(path.dirname(lockPath), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const fd = fs.openSync(lockPath, "wx");
+      try {
+        fs.writeFileSync(fd, lockBody, "utf8");
+      } finally {
+        fs.closeSync(fd);
+      }
+      return () => {
+        try {
+          if (fs.existsSync(lockPath) && fs.readFileSync(lockPath, "utf8") === lockBody) fs.unlinkSync(lockPath);
+        } catch {
+          // Cleanup is best-effort; the next runner can reap a dead lock.
+        }
+      };
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+      let owner;
+      try {
+        owner = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+      } catch {
+        owner = null;
+      }
+      const ownerAlive = Number.isInteger(owner?.pid) && processAlive(owner.pid);
+      const ownerAge = Number.isFinite(owner?.startedAt) ? Date.now() - owner.startedAt : Infinity;
+      if (ownerAlive && ownerAge < RUN_LOCK_MAX_AGE_MS) {
+        throw new RunFailure(`project-run-already-active: ${lockPath}`);
+      }
+      try {
+        if (fs.existsSync(lockPath) && fs.readFileSync(lockPath, "utf8") === (owner ? JSON.stringify(owner) : fs.readFileSync(lockPath, "utf8"))) {
+          fs.unlinkSync(lockPath);
+        }
+      } catch {
+        // A concurrent owner may have replaced or removed the lock; retry once.
+      }
+    }
+  }
+  throw new RunFailure(`project-run-already-active: ${lockPath}`);
+}
+
+function processAlive(pid) {
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
