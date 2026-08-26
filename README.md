@@ -28,11 +28,14 @@ npm test
 The native canary requires an interactive Windows desktop, Warcraft III, and a
 map built with `grill`; it cannot run in a headless CI worker.
 
-Build the canary in an isolated consumer/temp directory and pass that exact
-fresh map to the runner:
+Build the canary in an isolated consumer/temp directory, capture the build
+output hash, and pass both values to the runner. The hash must come from the
+build step or its manifest; the runner refuses a missing, stale, or wrong map:
 
 ```powershell
-node node/canary/run-canary.cjs --map=<freshly-built-map.w3x> --wgc-speed=12
+$map = Resolve-Path <freshly-built-map.w3x>
+$sha1 = (Get-FileHash $map -Algorithm SHA1).Hash.ToLowerInvariant()
+node node/canary/run-canary.cjs --map=$map --map-sha1=$sha1 --wgc-speed=12
 ```
 
 The canary runner deliberately does not search `_build` for a “latest” map.

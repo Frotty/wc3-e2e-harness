@@ -2,7 +2,7 @@
 
 /* Canary CLI over the production runner (src/runner/run.cjs).
  *
- *   node node/canary/run-canary.cjs --map=<freshly-built-map.w3x>
+ *   node node/canary/run-canary.cjs --map=<freshly-built-map.w3x> --map-sha1=<build-output-sha1>
  *        [--suite=canary-pass] [--wgc-speed=0] [--runs=1] [--speeds=1,6,8] [--keep-open]
  *
  * --runs with --speeds cycles the speed matrix for the release-gate soak
@@ -14,6 +14,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const { runSuite } = require("../src/runner/run.cjs");
+const { sha1File } = require("../src/runner/wgc.cjs");
 
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
 const PROJECT_ID = "canary";
@@ -48,6 +49,16 @@ async function main() {
   const mapPath = argumentValue("map");
   if (!mapPath || !fs.existsSync(mapPath)) {
     console.error("A freshly built map is required; build it in an isolated consumer/temp directory and pass --map=<path>.");
+    return 2;
+  }
+  const expectedMapSha1 = argumentValue("map-sha1");
+  if (!expectedMapSha1 || !/^[0-9a-f]{40}$/i.test(expectedMapSha1)) {
+    console.error("An independently captured SHA-1 for the fresh build output is required; pass --map-sha1=<40-hex-digits>.");
+    return 2;
+  }
+  const actualMapSha1 = sha1File(mapPath);
+  if (actualMapSha1 !== expectedMapSha1.toLowerCase()) {
+    console.error(`Map SHA-1 mismatch: expected ${expectedMapSha1.toLowerCase()}, got ${actualMapSha1}. Refusing to launch a stale or wrong map.`);
     return 2;
   }
   const runs = Number(argumentValue("runs", "1"));

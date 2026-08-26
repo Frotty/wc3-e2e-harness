@@ -134,7 +134,7 @@ public class E2E
 				startSuite()
 
 	static function assertTrue(string id, boolean condition)
-		if not active or finished
+		if not active or finished or finishRequested
 			return
 		if condition
 			assertsPassed++
@@ -174,14 +174,14 @@ public class E2E
 
 	/** Publishes progress for a deliberately synchronous suite body. */
 	static function pulse()
-		if not active or finished
+		if not active or finished or finishRequested
 			return
 		heartbeatCount++
 		emit("RUNNING", "{}")
 
 	// "event" itself collides with the JASS native type name.
 	static function recordEvent(string id)
-		if not active or finished
+		if not active or finished or finishRequested
 			return
 		for counter in events
 			if counter.id == id
@@ -198,7 +198,7 @@ public class E2E
 		Use this instead of baking a number into an event id. A metric keeps one stable name across runs, so
 		results can be compared run to run, and it costs one slot no matter how much the value moves. */
 	static function recordMetric(string id, real value)
-		if not active or finished
+		if not active or finished or finishRequested
 			return
 		for metric in metrics
 			if metric.id == id
