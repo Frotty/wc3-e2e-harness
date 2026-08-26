@@ -110,6 +110,7 @@ async function runSuite(options) {
   let launchSnapshotTaken = false;
   let shutdown = "none";
   let releaseRunLock = () => {};
+  let releaseLaunchLock = () => {};
 
   // One shared observation step for every phase.
   const step = async () => {
@@ -251,6 +252,11 @@ async function runSuite(options) {
     }
     artifacts.writeRun({ identity, map: mapPath, loadFile, wgcSpeed, suiteTimeoutMs, startupTimeoutMs });
     log(`Launching ${suiteId} (speed ${wgcSpeed > 0 ? `${wgcSpeed}x` : "1x"})...`);
+    releaseLaunchLock = acquireRunLock(path.join(customMapData, "wc3-e2e", "launch.lock"), {
+      pid: process.pid,
+      startedAt: Date.now(),
+      runId,
+    });
     existingWc3Pids = win32.listWc3Pids();
     launchSnapshotTaken = true;
     spawn("cmd.exe", ["/d", "/s", "/c", "start", "", wc3Exe, ...launchArgs], {
@@ -260,6 +266,8 @@ async function runSuite(options) {
       cwd: wgcSpeed > 0 ? wc3Root : undefined,
     }).unref();
     pid = await win32.waitForNewWc3Pid(existingWc3Pids);
+    releaseLaunchLock();
+    releaseLaunchLock = () => {};
     if (!pid) throw new RunFailure("wc3-process-did-not-appear");
     log(`  pid ${pid}`);
 
@@ -386,7 +394,10 @@ async function runSuite(options) {
     if (pid && win32.isProcessRunning(pid)) {
       await win32.screenshot(pid, path.join(artifacts.dir, "failure.png"));
     }
-    if (!keepOpen && launchSnapshotTaken) await win32.killWc3PidsExcept(existingWc3Pids, QUIT_CLEANUP_MS);
+    releaseLaunchLock();
+    // A failed run must not leave a live map writer behind after releasing
+    // either lock, even when keepOpen was requested for successful runs.
+    if (launchSnapshotTaken) await win32.killWc3PidsExcept(existingWc3Pids, QUIT_CLEANUP_MS);
     removeOwnedArmedFile();
     releaseRunLock();
     shutdown = "failed";
@@ -466,13 +477,16 @@ function acquireRunLock(lockPath, metadata) {
   const lockBody = JSON.stringify(metadata);
   fs.mkdirSync(path.dirname(lockPath), { recursive: true });
   for (let attempt = 0; attempt < 2; attempt++) {
+    const tempPath = `${lockPath}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
     try {
-      const fd = fs.openSync(lockPath, "wx");
-      try {
-        fs.writeFileSync(fd, lockBody, "utf8");
-      } finally {
-        fs.closeSync(fd);
-      }
+      // Publish complete metadata atomically. A contender must never see
+      // an empty lock and mistake an in-progress owner for a stale one.
+      fs.writeFileSync(tempPath, lockBody, { encoding: "utf8", flag: "wx" });
+      // Windows rename can replace an existing destination. A hard-link
+      // creation is atomic and fails with EEXIST instead, so no contender can
+      // steal an already-owned lock.
+      fs.linkSync(tempPath, lockPath);
+      try { fs.unlinkSync(tempPath); } catch {}
       return () => {
         try {
           if (fs.existsSync(lockPath) && fs.readFileSync(lockPath, "utf8") === lockBody) fs.unlinkSync(lockPath);
@@ -481,12 +495,26 @@ function acquireRunLock(lockPath, metadata) {
         }
       };
     } catch (error) {
-      if (error.code !== "EEXIST") throw error;
+      try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch {}
+      if (error.code !== "EEXIST" && error.code !== "EPERM") throw error;
+      let lockStat;
+      try {
+        lockStat = fs.statSync(lockPath);
+      } catch {
+        continue;
+      }
+      let lockContents;
       let owner;
       try {
-        owner = JSON.parse(fs.readFileSync(lockPath, "utf8"));
+        lockContents = fs.readFileSync(lockPath, "utf8");
+        owner = JSON.parse(lockContents);
       } catch {
+        lockContents = "";
         owner = null;
+      }
+      const lockAge = Date.now() - lockStat.mtimeMs;
+      if (!owner && lockAge < RUN_LOCK_MAX_AGE_MS) {
+        throw new RunFailure(`project-run-already-active: ${lockPath}`);
       }
       const ownerAlive = Number.isInteger(owner?.pid) && processAlive(owner.pid);
       const ownerAge = Number.isFinite(owner?.startedAt) ? Date.now() - owner.startedAt : Infinity;
@@ -494,7 +522,8 @@ function acquireRunLock(lockPath, metadata) {
         throw new RunFailure(`project-run-already-active: ${lockPath}`);
       }
       try {
-        if (fs.existsSync(lockPath) && fs.readFileSync(lockPath, "utf8") === (owner ? JSON.stringify(owner) : fs.readFileSync(lockPath, "utf8"))) {
+        const expectedContents = owner ? JSON.stringify(owner) : lockContents;
+        if (fs.existsSync(lockPath) && fs.readFileSync(lockPath, "utf8") === expectedContents) {
           fs.unlinkSync(lockPath);
         }
       } catch {
