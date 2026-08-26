@@ -193,6 +193,18 @@ class Win32Agent {
 }
 
 const agent = new Win32Agent();
+let agentUsers = 0;
+
+function acquireAgent() {
+  agentUsers++;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    agentUsers = Math.max(0, agentUsers - 1);
+    if (agentUsers === 0) agent.shutdown();
+  };
+}
 
 // Soft-failure wrappers: a missing window or dead agent returns false/null so
 // the run loop can absorb it and retry or fail on its own deadline.
@@ -293,6 +305,7 @@ module.exports = {
   waitForNewWc3Pid,
   waitForNewProcess,
   agent,
+  acquireAgent,
   postKey,
   foreground,
   screenshot,

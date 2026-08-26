@@ -55,6 +55,7 @@ async function runWorldEditorMap(options) {
   const mapName = path.basename(resolvedMapPath, path.extname(resolvedMapPath));
   const runId = `world-editor-${mapName}-${new Date().toISOString().replace(/[:.]/g, "-")}`;
   const artifacts = createArtifactWriter({ dir: path.join(artifactRoot, runId) });
+  const releaseAgent = win32.acquireAgent();
   const existingPids = win32.listWorldEditorPids();
   const initialTitles = new Map();
   for (const pid of existingPids) {
@@ -124,7 +125,7 @@ async function runWorldEditorMap(options) {
       shutdown = "preserved-existing";
     }
     const full = artifacts.writeResult({ ...result, shutdown });
-    win32.agent.shutdown();
+    releaseAgent();
     return { ...full, exitCode: full.verdict === "PASS" ? 0 : 1, artifactDir: artifacts.dir };
   };
 
@@ -207,7 +208,7 @@ async function runWorldEditorMap(options) {
       map: resolvedMapPath,
       shutdown,
     });
-    win32.agent.shutdown();
+    releaseAgent();
     return { ...result, exitCode: reason.startsWith("unexpected") ? 2 : 1, artifactDir: artifacts.dir };
   }
 }

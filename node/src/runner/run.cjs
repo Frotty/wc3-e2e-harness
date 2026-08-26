@@ -79,6 +79,7 @@ async function runSuite(options) {
   const buildId = sha1File(mapPath).slice(0, 10);
   const identity = makeIdentity({ projectId, buildId, runId, nonce, suiteId });
   const artifacts = createArtifactWriter({ dir: path.join(artifactRoot, runId) });
+  const releaseAgent = win32.acquireAgent();
 
   const channelDir = path.join(customMapData, "wc3-e2e", projectId);
   const outputs = [path.join(channelDir, "output-a.pld"), path.join(channelDir, "output-b.pld")];
@@ -170,11 +171,11 @@ async function runSuite(options) {
           artifactDir: artifacts.dir,
         }), screenProbeTimeoutMs, "screen-probe-timeout");
         artifacts.appendTimeline({ at: Date.now(), event: "screen-probe", phase: machine.state, result: screen ?? "unknown" });
-        if (screen === "main-menu") {
+        if (screen === "main-menu" && !seen.ready && !seen.loaded && !seen.running && !machine.verdict) {
           machine.noteFailure("main-menu-before-map-load");
         }
       } catch (error) {
-        machine.noteFailure(`screen-probe-failed: ${error.message}`);
+        artifacts.appendTimeline({ at: Date.now(), event: "screen-probe-failed", phase: machine.state, error: error.message });
       }
     }
     if (mapStartupTimedOut({
@@ -404,14 +405,14 @@ async function runSuite(options) {
     releaseRunLock();
     shutdown = "failed";
     const result = artifacts.writeResult({ ...summary(machine, seen, shutdown), failure: reason });
-    win32.agent.shutdown();
+    releaseAgent();
     return { ...result, exitCode: reason.startsWith("unexpected") ? 2 : 1, artifactDir: artifacts.dir };
   }
 
   const result = artifacts.writeResult(summary(machine, seen, shutdown));
   removeOwnedArmedFile();
   releaseRunLock();
-  win32.agent.shutdown();
+  releaseAgent();
   return { ...result, exitCode: result.verdict === "PASS" ? 0 : 1, artifactDir: artifacts.dir };
 }
 

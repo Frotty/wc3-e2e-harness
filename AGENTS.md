@@ -23,6 +23,8 @@ particular map repository.
 - Every runner invocation gets a unique `runId`, nonce, and artifact directory. The channel namespace
   is exclusive per `projectId`: a second same-project run fails before touching the first run's files;
   different project IDs can run concurrently.
+- The Win32 agent is reference-counted across concurrent runners and shuts down only after its last
+  lease is released.
 - Cleanup may terminate only Warcraft III processes created after the run's PID snapshot. Preserve
   processes that existed before the run.
 - Consumer build staging should live in an OS temp directory and be removed in `finally`. Retain only
