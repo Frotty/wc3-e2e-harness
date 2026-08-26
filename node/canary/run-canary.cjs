@@ -65,16 +65,17 @@ async function main() {
     console.error(`Map SHA-1 mismatch: expected ${expectedMapSha1.toLowerCase()}, got ${actualMapSha1}. Refusing to launch a stale or wrong map.`);
     return 2;
   }
-  const verifiedMapDir = fs.mkdtempSync(path.join(os.tmpdir(), "wc3-e2e-canary-map-"));
-  const verifiedMapPath = path.join(verifiedMapDir, path.basename(mapPath));
-  fs.writeFileSync(verifiedMapPath, mapBytes);
   const runs = Number(argumentValue("runs", "1"));
   const speeds = argumentValue("speeds", argumentValue("wgc-speed", "0"))
     .split(",")
     .map((s) => Number(s.trim()));
   const keepOpen = process.argv.includes("--keep-open");
 
+  let verifiedMapDir = null;
   try {
+    verifiedMapDir = fs.mkdtempSync(path.join(os.tmpdir(), "wc3-e2e-canary-map-"));
+    const verifiedMapPath = path.join(verifiedMapDir, path.basename(mapPath));
+    fs.writeFileSync(verifiedMapPath, mapBytes);
     for (let i = 0; i < runs; i++) {
       const speed = speeds[i % speeds.length];
       if (runs > 1) console.log(`--- run ${i + 1}/${runs} (${speed > 1 ? `${speed}x` : "1x"}) ---`);
@@ -104,7 +105,7 @@ async function main() {
     }
     return 0;
   } finally {
-    fs.rmSync(verifiedMapDir, { recursive: true, force: true });
+    if (verifiedMapDir) fs.rmSync(verifiedMapDir, { recursive: true, force: true });
   }
 }
 
