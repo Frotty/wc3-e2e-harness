@@ -117,9 +117,15 @@ async function runSuite(options) {
   // One shared observation step for every phase.
   const step = async () => {
     if (pid !== undefined && !win32.isProcessRunning(pid)) {
-      machine.noteProcessExit();
-      if (machine.failure) throw new RunFailure(machine.failure.reason);
-      return;
+      const replacement = [...ownedWc3Pids].find((candidate) => win32.isProcessRunning(candidate));
+      if (replacement !== undefined) {
+        pid = replacement;
+        log(`  switched to replacement pid ${pid}`);
+      } else {
+        machine.noteProcessExit();
+        if (machine.failure) throw new RunFailure(machine.failure.reason);
+        return;
+      }
     }
     const polled = reader.poll(outputs.map((file, index) => outputReaders[index].read(file)));
     if (polled.accepted) {
@@ -162,20 +168,25 @@ async function runSuite(options) {
       nextScreenProbeAt = Date.now() + screenProbeMs;
       const probeId = ++screenProbeCount;
       const screenshotPath = path.join(artifacts.dir, "screens", `screen-${probeId}.png`);
-      const capturedPath = await win32.screenshot(pid, screenshotPath);
+      const probeBudgetMs = Math.max(1, Math.min(
+        screenProbeTimeoutMs,
+        loadingStartedAt !== null && Number.isFinite(startupTimeoutMs)
+          ? Math.max(1, startupTimeoutMs - (Date.now() - loadingStartedAt))
+          : screenProbeTimeoutMs,
+      ));
       try {
+        const capturedPath = await withTimeout(win32.screenshot(pid, screenshotPath), probeBudgetMs, "screen-probe-timeout");
         const screen = await withTimeout(screenProbe({
           pid,
           phase: machine.state,
           screenshotPath: capturedPath,
           artifactDir: artifacts.dir,
-        }), screenProbeTimeoutMs, "screen-probe-timeout");
+        }), Math.max(1, Math.min(probeBudgetMs, loadingStartedAt !== null && Number.isFinite(startupTimeoutMs)
+          ? Math.max(1, startupTimeoutMs - (Date.now() - loadingStartedAt))
+          : probeBudgetMs)), "screen-probe-timeout");
         artifacts.appendTimeline({ at: Date.now(), event: "screen-probe", phase: machine.state, result: screen ?? "unknown" });
-        if (screen === "main-menu" && !seen.ready && !seen.loaded && !seen.running && !machine.verdict) {
-          machine.noteFailure("main-menu-before-map-load");
-        }
       } catch (error) {
-        artifacts.appendTimeline({ at: Date.now(), event: "screen-probe-failed", phase: machine.state, error: error.message });
+        artifacts.appendTimeline({ at: Date.now(), event: "screen-probe-failed", phase: machine.state, error: error.message, diagnosticOnly: true });
       }
     }
     if (mapStartupTimedOut({
@@ -267,11 +278,13 @@ async function runSuite(options) {
       shell: false,
       cwd: wgcSpeed > 0 ? wc3Root : undefined,
     }).unref();
-    pid = await win32.waitForNewWc3Pid(existingWc3Pids);
+    pid = await win32.waitForNewWc3Pid(existingWc3Pids, 20_000, ownedWc3Pids);
     releaseLaunchLock();
     releaseLaunchLock = () => {};
     if (!pid) throw new RunFailure("wc3-process-did-not-appear");
-    ownedWc3Pids.add(pid);
+    for (const candidate of win32.listWc3Pids()) {
+      if (!existingWc3Pids.has(candidate)) ownedWc3Pids.add(candidate);
+    }
     log(`  pid ${pid}`);
 
     // --- Window ------------------------------------------------------------

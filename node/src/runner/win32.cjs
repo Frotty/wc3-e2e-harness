@@ -88,7 +88,7 @@ function killProcess(pid) {
 // WC3's -launch flow can re-exec: the first pid may be a short-lived launcher.
 // Require the candidate to survive a settle re-check; if it died, track the
 // replacement.
-async function waitForNewWc3Pid(existingPids, timeoutMs = 20_000) {
+async function waitForNewWc3Pid(existingPids, timeoutMs = 20_000, claimedPids = null) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     let candidate;
@@ -98,6 +98,8 @@ async function waitForNewWc3Pid(existingPids, timeoutMs = 20_000) {
     if (candidate !== undefined) {
       await sleep(1500);
       const recheck = listWc3Pids();
+      const newPids = pidsNotIn(recheck, existingPids);
+      if (claimedPids) for (const pid of newPids) claimedPids.add(pid);
       if (recheck.has(candidate)) return candidate;
       for (const pid of recheck) {
         if (!existingPids.has(pid)) return pid;
