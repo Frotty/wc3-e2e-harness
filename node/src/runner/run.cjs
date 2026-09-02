@@ -49,9 +49,9 @@ async function runSuite(options) {
     wgcSpeed = 0,
     // Off by default: a suite that yanks the game in front of whatever the developer is doing, once
     // per launch and again for every loading-screen keypress, is unusable to run in the background.
-    // Input does not need it - keys are delivered with SendMessage to the window handle, and the
-    // launch args already carry -nowfpause so the game keeps simulating while unfocused. Turn it on
-    // to watch a run, or if a host proves to need the activation.
+    // Input does not need it - keys are delivered with SendMessage to the window handle - and
+    // resolveGameArgs below guarantees the -nowfpause an unfocused run depends on. Turn it on to
+    // watch a run, or if a host proves to need the activation.
     focus = false,
     gameArgs: rawGameArgs = "-nowfpause -launch",
     slots = [],
@@ -69,11 +69,7 @@ async function runSuite(options) {
   } = options;
 
   // --- Prepare -------------------------------------------------------------
-  // WC3 always runs windowed: fullscreen steals the desktop during automated
-  // runs and changes focus/capture behavior.
-  const gameArgs = rawGameArgs.includes("-windowmode")
-    ? rawGameArgs
-    : `${rawGameArgs} -windowmode windowed`;
+  const gameArgs = resolveGameArgs(rawGameArgs, focus);
 
   const wc3Exe = options.wc3Exe ?? findWc3Exe();
   if (!wc3Exe) throw new RunFailure("Warcraft III executable not found");
@@ -489,9 +485,29 @@ function enterMapLoadConfirmation(machine) {
   }
 }
 
+/**
+ * Launch arguments the runner depends on, regardless of what the caller asked for.
+ *
+ * Both requirements here exist for the same reason: the runner drives a window it does not own.
+ * Fullscreen steals the desktop and changes capture behavior, and an unfocused game pauses without
+ * -nowfpause, which stalls LOADED and every heartbeat after it.
+ *
+ * They have to be applied in one place because `gameArgs` is caller-supplied and the WGC branch
+ * forwards it to the executable verbatim. -nowfpause was previously only present because it happened
+ * to sit in the default string, so a caller passing their own arguments silently dropped it - which
+ * did not matter while every run was force-focused, and does now that unfocused is the default.
+ */
+function resolveGameArgs(rawGameArgs, focus) {
+  let args = rawGameArgs;
+  if (!args.includes("-windowmode")) args = `${args} -windowmode windowed`;
+  if (!focus && !args.includes("-nowfpause")) args = `${args} -nowfpause`;
+  return args;
+}
+
 module.exports = {
   acquireRunLock,
   runSuite,
+  resolveGameArgs,
   RunFailure,
   loadingComplete,
   mapStartupTimedOut,

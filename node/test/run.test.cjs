@@ -11,6 +11,7 @@ const {
   acquireRunLock,
   loadingComplete,
   mapStartupTimedOut,
+  resolveGameArgs,
   terminalSnapshotAllowed,
   unpauseComplete,
 } = require("../src/runner/run.cjs");
@@ -73,4 +74,23 @@ test("map-load confirmation leaves the UNPAUSE deadline before settling", () => 
 
   assert.equal(machine.state, "RUNNING");
   assert.deepEqual(machine.tick(), { ok: true });
+});
+
+test("an unfocused run keeps the no-pause guard even when the caller replaces the game args", () => {
+  // The WGC branch forwards gameArgs verbatim, so a caller-supplied string is the whole command line.
+  // Without -nowfpause an unfocused game pauses and the suite stalls before LOADED.
+  assert.match(resolveGameArgs("-launch", false), /-nowfpause/);
+});
+
+test("a focused run leaves the caller's game args alone", () => {
+  assert.equal(resolveGameArgs("-launch -windowmode windowed", true), "-launch -windowmode windowed");
+});
+
+test("the no-pause guard is not duplicated when the caller already passed it", () => {
+  const args = resolveGameArgs("-nowfpause -launch", false);
+  assert.equal(args.match(/-nowfpause/g).length, 1);
+});
+
+test("windowed mode is still forced for callers that do not ask for it", () => {
+  assert.match(resolveGameArgs("-launch", true), /-windowmode windowed/);
 });
