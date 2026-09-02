@@ -22,6 +22,7 @@ function has(name) {
 function fail(message) {
   console.error(`wc3-e2e-harness: ${message}`);
   console.error("Usage: node run-suite.cjs --project-id=slug --ability-id=RAW4 --suite=id --map=map.w3x [options]");
+  console.error("  --focus  activate the game window during the run (default: leave focus alone)");
   process.exitCode = 2;
 }
 
@@ -71,6 +72,9 @@ async function main() {
       startupTimeoutMs,
       wgcSpeed: speed,
       keepOpen: has("keep-open"),
+      // Without this the CLI - the supported entry point - could never opt back in, so a host that
+      // does need window activation would have no way to ask for it short of importing the API.
+      focus: has("focus"),
       mapLoadOnly: has("map-load-only"),
       artifactRoot: path.resolve(option("artifact-root", path.join("artifacts", projectId))),
     });
