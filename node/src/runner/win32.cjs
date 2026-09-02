@@ -278,6 +278,18 @@ async function foreground(pid) {
   }
 }
 
+/**
+ * True once the process owns a window, without touching focus.
+ *
+ * The agent's title lookup already resolves the window handle and throws when there is none, so this
+ * is the same readiness signal `foreground` provided as a side effect of activating the window -
+ * minus the activation. An empty title is still a window, so only a null (lookup failed) means "not
+ * there yet".
+ */
+async function hasWindow(pid) {
+  return (await windowTitle(pid)) !== null;
+}
+
 async function screenshot(pid, outPath) {
   try {
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
@@ -311,6 +323,7 @@ module.exports = {
   acquireAgent,
   postKey,
   foreground,
+  hasWindow,
   screenshot,
   killAllWc3,
   killWc3PidsExcept,
