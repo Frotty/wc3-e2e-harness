@@ -93,6 +93,37 @@ public class E2E
 	static function isActive() returns boolean
 		return active
 
+	/* Whole-suite deadline.
+
+		A suite reports by CALLING finish(). Nothing forces it to: a closure chain that dies part way
+		through - a null handle dereferenced inside a doAfter, a fixture waiting on something that
+		cannot happen - simply stops. The runner cannot tell that from a slow suite, so it waits out
+		the whole suite timeout and reports no verdict at all, which is the least useful outcome
+		available: minutes spent, and nothing said about where it stopped.
+
+		Armed, the same stall becomes a named failing assertion within `seconds` of game time. Lives
+		here rather than in a consumer because every consumer has this failure mode and none of it is
+		map-specific; the startup watchdog on the runner side is the same idea from the other end.
+
+		A deadline cannot be cancelled once armed, so it is retired by generation: retireDeadline
+		bumps the counter and a callback whose generation no longer matches does nothing. Arming twice
+		likewise retires the first. */
+	private static var deadlineGeneration = 0
+
+	/** Fails and finishes the suite if it has not finished within `seconds` of GAME time. */
+	static function armDeadline(string label, real seconds)
+		deadlineGeneration++
+		let generation = deadlineGeneration
+		doAfter(seconds) ->
+			if active and deadlineGeneration == generation
+				recordEvent("deadline-" + label)
+				assertTrue(label + "-finished-within-deadline", false)
+				finish()
+
+	/** Retires the armed deadline. Call before publishing a normal verdict. */
+	static function retireDeadline()
+		deadlineGeneration++
+
 	/** Call from the adapter's earliest init hook, after registrations. */
 	static function bootstrap(string expectedProjectId)
 		// Keep the optional Lua bridge exports reachable even when a consumer
