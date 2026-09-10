@@ -4,7 +4,8 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
-/* Win32 layer: process liveness via tasklist (a
+/* Win32 layer, ported from Castle Fight's proven Deno modules
+ * (win32-agent.ts / input-capture.ts): process liveness via tasklist (a
  * kill-signal probe needs terminate rights Battle.net-authenticated WC3
  * denies), pid discovery with the -launch re-exec quirk handled, and the
  * persistent PowerShell agent (win32-agent.ps1) serving foreground/key/
@@ -87,7 +88,7 @@ function killProcess(pid) {
 // WC3's -launch flow can re-exec: the first pid may be a short-lived launcher.
 // Require the candidate to survive a settle re-check; if it died, track the
 // replacement.
-async function waitForNewWc3Pid(existingPids, timeoutMs = 20_000, claimedPids = null) {
+async function waitForNewWc3Pid(existingPids, timeoutMs = 20_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     let candidate;
@@ -97,8 +98,6 @@ async function waitForNewWc3Pid(existingPids, timeoutMs = 20_000, claimedPids = 
     if (candidate !== undefined) {
       await sleep(1500);
       const recheck = listWc3Pids();
-      const newPids = pidsNotIn(recheck, existingPids);
-      if (claimedPids) for (const pid of newPids) claimedPids.add(pid);
       if (recheck.has(candidate)) return candidate;
       for (const pid of recheck) {
         if (!existingPids.has(pid)) return pid;
@@ -128,9 +127,8 @@ class Win32Agent {
       "-File",
       AGENT_PS1,
     ], { stdio: ["pipe", "pipe", "ignore"], shell: false });
-    this.proc = proc;
-    proc.on("error", () => this.handleDeath(proc));
-    proc.on("exit", () => this.handleDeath(proc));
+    proc.on("error", () => this.handleDeath());
+    proc.on("exit", () => this.handleDeath());
     proc.stdout.on("data", (chunk) => {
       this.buf += chunk;
       let index;
@@ -147,10 +145,10 @@ class Win32Agent {
         }
       }
     });
+    this.proc = proc;
   }
 
-  handleDeath(proc) {
-    if (proc && proc !== this.proc) return;
+  handleDeath() {
     const pending = this.pending;
     this.pending = new Map();
     this.proc = null;
@@ -186,28 +184,15 @@ class Win32Agent {
 
   shutdown() {
     if (this.proc) {
-      const proc = this.proc;
       try {
-        proc.kill();
+        this.proc.kill();
       } catch {}
-      this.handleDeath(proc);
+      this.proc = null;
     }
   }
 }
 
 const agent = new Win32Agent();
-let agentUsers = 0;
-
-function acquireAgent() {
-  agentUsers++;
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    agentUsers = Math.max(0, agentUsers - 1);
-    if (agentUsers === 0) agent.shutdown();
-  };
-}
 
 // Soft-failure wrappers: a missing window or dead agent returns false/null so
 // the run loop can absorb it and retry or fail on its own deadline.
@@ -254,18 +239,6 @@ async function killPidsExcept(listPids, preservePids, timeoutMs = 10_000) {
   return [...listPids()].every((pid) => preservePids.has(pid));
 }
 
-async function killSpecificPids(pids, timeoutMs = 10_000) {
-  const ownedPids = [...new Set(pids)].filter(Boolean);
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const alive = ownedPids.filter((pid) => isProcessRunning(pid));
-    if (alive.length === 0) return true;
-    for (const pid of alive) killProcess(pid);
-    await sleep(500);
-  }
-  return ownedPids.every((pid) => !isProcessRunning(pid));
-}
-
 function pidsNotIn(pids, preservePids) {
   return [...pids].filter((pid) => !preservePids.has(pid));
 }
@@ -276,18 +249,6 @@ async function foreground(pid) {
   } catch {
     return null;
   }
-}
-
-/**
- * True once the process owns a window, without touching focus.
- *
- * The agent's title lookup already resolves the window handle and throws when there is none, so this
- * is the same readiness signal `foreground` provided as a side effect of activating the window -
- * minus the activation. An empty title is still a window, so only a null (lookup failed) means "not
- * there yet".
- */
-async function hasWindow(pid) {
-  return (await windowTitle(pid)) !== null;
 }
 
 async function screenshot(pid, outPath) {
@@ -320,14 +281,11 @@ module.exports = {
   waitForNewWc3Pid,
   waitForNewProcess,
   agent,
-  acquireAgent,
   postKey,
   foreground,
-  hasWindow,
   screenshot,
   killAllWc3,
   killWc3PidsExcept,
-  killSpecificPids,
   killPidsExcept,
   pidsNotIn,
   windowTitle,

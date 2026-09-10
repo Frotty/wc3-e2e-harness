@@ -4,7 +4,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-// Per-machine Warcraft III path discovery.
+// Per-machine path discovery (plan: "Environment Prerequisites"), ported from
+// Castle Fight's config auto-detection.
 
 /** Checked first, ahead of every default candidate, for an install outside the usual Program
     Files locations (a different drive, a Battle.net custom install directory, ...). Unset by

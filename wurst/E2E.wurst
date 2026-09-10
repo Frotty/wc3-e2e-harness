@@ -4,7 +4,7 @@ import E2EProtocol
 import ClosureTimers
 import LinkedList
 
-/*  Shared WC3 E2E harness — generic map-side runtime.
+/*  Shared WC3 E2E harness — map-side runtime (docs/SharedE2EHarnessPlan.md).
 
 	The Node runner writes a one-shot ARMED launch file (frame-wrapped
 	key=value body) into CustomMapData/wc3-e2e/<projectId>/ before Warcraft
@@ -69,7 +69,6 @@ public class E2E
 	private static constant metrics = new LinkedList<Metric>()
 	private static var active = false
 	private static var finished = false
-	private static var finishRequested = false
 	private static var heartbeatsStopped = false
 	private static string projectId = ""
 	private static string buildId = ""
@@ -93,43 +92,8 @@ public class E2E
 	static function isActive() returns boolean
 		return active
 
-	/* Whole-suite deadline.
-
-		A suite reports by CALLING finish(). Nothing forces it to: a closure chain that dies part way
-		through - a null handle dereferenced inside a doAfter, a fixture waiting on something that
-		cannot happen - simply stops. The runner cannot tell that from a slow suite, so it waits out
-		the whole suite timeout and reports no verdict at all, which is the least useful outcome
-		available: minutes spent, and nothing said about where it stopped.
-
-		Armed, the same stall becomes a named failing assertion within `seconds` of game time. Lives
-		here rather than in a consumer because every consumer has this failure mode and none of it is
-		map-specific; the startup watchdog on the runner side is the same idea from the other end.
-
-		A deadline cannot be cancelled once armed, so it is retired by generation: retireDeadline
-		bumps the counter and a callback whose generation no longer matches does nothing. Arming twice
-		likewise retires the first. */
-	private static var deadlineGeneration = 0
-
-	/** Fails and finishes the suite if it has not finished within `seconds` of GAME time. */
-	static function armDeadline(string label, real seconds)
-		deadlineGeneration++
-		let generation = deadlineGeneration
-		doAfter(seconds) ->
-			if active and deadlineGeneration == generation
-				recordEvent("deadline-" + label)
-				assertTrue(label + "-finished-within-deadline", false)
-				finish()
-
-	/** Retires the armed deadline. Call before publishing a normal verdict. */
-	static function retireDeadline()
-		deadlineGeneration++
-
 	/** Call from the adapter's earliest init hook, after registrations. */
 	static function bootstrap(string expectedProjectId)
-		// Keep the optional Lua bridge exports reachable even when a consumer
-		// invokes them dynamically from a map-side Lua chunk. They are no-ops
-		// before a valid launch has armed this runtime.
-		luaBridgeKeepAlive()
 		let launch = new File("wc3-e2e/" + expectedProjectId + "/armed.pld")
 			.readAsString(GetLocalPlayer())
 		let frame = decodeFrame(launch)
@@ -165,7 +129,7 @@ public class E2E
 				startSuite()
 
 	static function assertTrue(string id, boolean condition)
-		if not active or finished or finishRequested
+		if not active or finished
 			return
 		if condition
 			assertsPassed++
@@ -175,44 +139,9 @@ public class E2E
 				failedIds += (failedIdCount > 0 ? "," : "") + id
 				failedIdCount++
 
-	/** Generic Lua-facing wrappers for map-side suites. */
-	static function luaAssertTrue(string id, boolean condition)
-		assertTrue(id, condition)
-
-	static function luaRecordEvent(string id)
-		recordEvent(id)
-
-	static function luaRecordMetric(string id, real value)
-		recordMetric(id, value)
-
-	static function luaPulse()
-		pulse()
-
-	static function luaFinish()
-		if not active or finished
-			return
-		// Lua calls this from a long-running timer callback. Only request the
-		// terminal result here; the Wurst heartbeat callback below performs the
-		// file write after the Lua callback has returned.
-		finishRequested = true
-
-	private static function luaBridgeKeepAlive()
-		luaAssertTrue("", true)
-		luaRecordEvent("")
-		luaRecordMetric("", 0.)
-		luaPulse()
-		luaFinish()
-
-	/** Publishes progress for a deliberately synchronous suite body. */
-	static function pulse()
-		if not active or finished or finishRequested
-			return
-		heartbeatCount++
-		emit("RUNNING", "{}")
-
 	// "event" itself collides with the JASS native type name.
 	static function recordEvent(string id)
-		if not active or finished or finishRequested
+		if not active or finished
 			return
 		for counter in events
 			if counter.id == id
@@ -229,7 +158,7 @@ public class E2E
 		Use this instead of baking a number into an event id. A metric keeps one stable name across runs, so
 		results can be compared run to run, and it costs one slot no matter how much the value moves. */
 	static function recordMetric(string id, real value)
-		if not active or finished or finishRequested
+		if not active or finished
 			return
 		for metric in metrics
 			if metric.id == id
@@ -266,9 +195,6 @@ public class E2E
 		emit("RUNNING", "{}")
 		doPeriodically(HEARTBEAT_INTERVAL) cb ->
 			if finished
-				destroy cb
-			else if finishRequested
-				finish()
 				destroy cb
 			else
 				gameSeconds += HEARTBEAT_INTERVAL
