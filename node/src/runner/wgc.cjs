@@ -5,8 +5,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 
-// WGC generation, ported from Castle Fight's confirmed createWgc: the bundled
-// Lua one-shot writes a .wgc game-configuration file that Warcraft III
+// WGC generation: the bundled Lua one-shot writes a .wgc game-configuration file that Warcraft III
 // consumes via -loadfile, selecting map, slots, and game speed without menu
 // navigation. The map is copied under a content-hash-suffixed name so a stale
 // build can never masquerade as the current one.

@@ -11,6 +11,7 @@ import ClosureTimers
 	  canary-stall  heartbeats stop without a terminal result
 	canary-delay  result only after a longer runtime
 	canary-empty  immediate terminal result for a no-op suite
+	map-driven    map-side code owns assertions and calls the generic Lua/JASS bridge
 */
 
 init
@@ -40,6 +41,11 @@ init
 
 	E2E.register("canary-empty") ->
 		E2E.finish()
+
+	E2E.register("map-driven") ->
+		// A generic hook for a map-provided suite. The map-side test code owns
+		// progress and the terminal result through E2E's protocol API.
+		E2E.recordEvent("map-suite-started")
 
 	E2E.bootstrap("canary")
 	if E2E.isActive()
