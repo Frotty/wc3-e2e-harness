@@ -193,7 +193,6 @@ async function runSuite(options) {
     // --- Launch ------------------------------------------------------------
     machine.enter("LAUNCH");
     let loadFile = mapPath;
-    let launchArgs;
     if (wgcSpeed > 0) {
       const wgc = createWgc({
         mapPath,
@@ -205,10 +204,8 @@ async function runSuite(options) {
         stagingDir: artifacts.dir,
       });
       loadFile = wgc.wgcPath;
-      launchArgs = ["-loadfile", loadFile, ...gameArgs.split(/\s+/).filter(Boolean)];
-    } else {
-      launchArgs = ["-launch", "-windowmode", "windowed", "-nowfpause", "-loadfile", loadFile];
     }
+    const launchArgs = buildLaunchArgs({ wgcSpeed, loadFile, gameArgs });
     artifacts.writeRun({ identity, map: mapPath, loadFile, wgcSpeed, suiteTimeoutMs });
     log(`Launching ${suiteId} (speed ${wgcSpeed > 0 ? `${wgcSpeed}x` : "1x"})...`);
     existingWc3Pids = win32.listWc3Pids();
@@ -378,8 +375,25 @@ function enterMapLoadConfirmation(machine) {
   }
 }
 
+/**
+ * Warcraft III launch arguments for a suite.
+ *
+ * `-editor` leads every form and is load-bearing: since v3 the retail client demands a login on every
+ * launch, and without it the game starts, never reaches RUNNING, and the run ends
+ * `process-exit-without-terminal-snapshot` with nothing anywhere saying a login was wanted. That
+ * symptom is indistinguishable from a hung map, so the flag is pinned by a test rather than left to
+ * whoever next edits this list.
+ */
+function buildLaunchArgs({ wgcSpeed, loadFile, gameArgs }) {
+  if (wgcSpeed > 0) {
+    return ["-editor", "-loadfile", loadFile, ...String(gameArgs ?? "").split(/\s+/).filter(Boolean)];
+  }
+  return ["-editor", "-launch", "-windowmode", "windowed", "-nowfpause", "-loadfile", loadFile];
+}
+
 module.exports = {
   runSuite,
+  buildLaunchArgs,
   RunFailure,
   loadingComplete,
   unpauseComplete,
