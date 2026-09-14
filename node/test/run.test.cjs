@@ -4,6 +4,7 @@ const assert = require("node:assert/strict");
 const { test } = require("node:test");
 
 const {
+  buildLaunchArgs,
   enterMapLoadConfirmation,
   loadingComplete,
   unpauseComplete,
@@ -35,4 +36,26 @@ test("map-load confirmation leaves the UNPAUSE deadline before settling", () => 
 
   assert.equal(machine.state, "RUNNING");
   assert.deepEqual(machine.tick(), { ok: true });
+});
+
+// Since Warcraft III v3 a launch without `-editor` sits at the login screen forever. The run then ends
+// `process-exit-without-terminal-snapshot`, which reads exactly like a hung map or a broken fixture, so
+// losing this flag costs a debugging session before anyone suspects the launch line. Pin it in both forms.
+test("every launch form passes -editor so the v3 client does not demand a login", () => {
+  assert.equal(buildLaunchArgs({ wgcSpeed: 16, loadFile: "suite.wgc", gameArgs: "" })[0], "-editor");
+  assert.equal(buildLaunchArgs({ wgcSpeed: 0, loadFile: "suite.w3x" })[0], "-editor");
+});
+
+test("wgc launches load the generated config and keep extra game args", () => {
+  assert.deepEqual(
+    buildLaunchArgs({ wgcSpeed: 16, loadFile: "suite.wgc", gameArgs: "-swapspeed  -nowfpause" }),
+    ["-editor", "-loadfile", "suite.wgc", "-swapspeed", "-nowfpause"],
+  );
+});
+
+test("a speedless launch is windowed and unpaused, and tolerates absent game args", () => {
+  assert.deepEqual(
+    buildLaunchArgs({ wgcSpeed: 0, loadFile: "suite.w3x" }),
+    ["-editor", "-launch", "-windowmode", "windowed", "-nowfpause", "-loadfile", "suite.w3x"],
+  );
 });
