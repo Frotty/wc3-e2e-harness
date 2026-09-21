@@ -156,3 +156,40 @@ inventing defaults.
 
 Each probe runs in its own thread via `ExecuteFunc`, so one crash cannot hide the others, and each
 writes its own file. Without that, the first crash ends `main` and every later reading is lost.
+
+## array-bounds-probe.j — ANSWER (2026-09-21, run in game)
+
+**Question.** Does an out-of-bounds array access abort the thread? The optimizer treats an array
+read as side-effect free and drops a statement whose only work is one, which is wrong if the read
+would have crashed.
+
+| thread | result |
+|---|---|
+| control, `arr[0]=42` then read it | `control=42` |
+| read `arr[8191]`, the last valid slot | `lastSlot=0` |
+| read `arr[8192]`, one past the end | `read8192=0` |
+| read `arr[-1]` | `readNeg=0` |
+| read `arr[100000]` | `readFar=0` |
+| write `arr[8192]=7` | completed |
+| `if arr[100000]>0 then endif`, then write a file | survived |
+
+**Out of bounds does not crash.** A read yields 0, a write completes, and execution continues. So
+the finding is refuted: `TrapAnalysis` is right to model only division and modulo by zero, and
+dropping a bare array read preserves behaviour. No compiler change was made.
+
+Worth knowing: the Wurst interpreter is *stricter* than the engine here and rejects both a negative
+index and one past the end. That is deliberate - it is a useful diagnostic for Wurst authors, and
+the interpreter is not on the w3p output path - but it means engine array-bounds behaviour cannot
+be asserted by running a program through it. The Lua backend does agree with the engine, which
+`LuaJassInputAuditTests.luaOutOfBoundsArrayReadYieldsZero` pins.
+
+### What it cost to get a reading
+
+Three runs. The first two produced no file at all and the map hung on the loading screen. The cause
+was not the out-of-range indices, which pjass and the game both accept: it was a
+`probeWriteFile` call added at the very **top** of `main`, before the map's own init had run. Moving
+it back to where the working probe had it fixed everything.
+
+The way to find that quickly is a control run: inject the previous, known-good probe into a fresh
+copy of the same map under the new name and run it. It passed and wrote its files, which ruled out
+the game, the injector, the map and the naming in one step and left only the script.
