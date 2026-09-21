@@ -193,3 +193,36 @@ it back to where the working probe had it fixed everything.
 The way to find that quickly is a control run: inject the previous, known-good probe into a fresh
 copy of the same map under the new name and run it. It passed and wrote its files, which ruled out
 the game, the injector, the map and the naming in one step and left only the script.
+
+## byte-literal-probe.j — ANSWER (2026-09-22, run in game)
+
+**Question.** Can a string literal in `war3map.j` hold arbitrary bytes, including ones that are not
+valid UTF-8? This decides whether a cipher can work over the whole byte range without changing how
+the script is written.
+
+Each case is a literal built from raw bytes, written back out through `Preload` so the bytes can be
+compared directly against what was injected.
+
+| literal | injected | came back | `StringLength` |
+|---|---|---|---|
+| ASCII control | `ascii-ok` | identical | - |
+| valid UTF-8 `Привет` | `d09fd180d0b8d0b2d0b5d182` | identical | 12 |
+| lone high bytes | `8081feff` | identical | 4 |
+| scrambled UTF-8, each byte +1 | `d1a0d281d1b9d1b3d1b6d283` | identical | 12 |
+| mixed `A C3 B A9 C` | `41c342a943` | identical | 5 |
+| equality and SubString on lone high bytes | - | `EQUAL`, `sub=81fe` | 4 |
+
+**Arbitrary bytes survive.** A literal holding bytes that are not valid UTF-8 loads, compares equal,
+slices byte-exactly and comes back unchanged. `StringLength` counts bytes, not characters: 12 for
+six Cyrillic letters, 5 for `A C3 B A9 C`. pjass accepts such literals too.
+
+### What it was for, and why nothing was built on it
+
+It was the gating question for widening the string cipher past printable ASCII, which currently
+leaves every run of non-ASCII text in clear. The bytes were never the obstacle. The obstacle is the
+decryptor in `w3p-backend/src/main/resources/MainHook_Crypto.wurst`, which maps a character to its
+value through a `StringHash` table built from the stdlib's `c2s`, and `c2s` stops at 127. Worse,
+`MultibyteDiagnostics` in the stdlib measures that `StringHash` **collapses every slice starting
+with a UTF-8 lead byte to one marker hash**, so a hash-based table can never tell lead bytes apart.
+Widening the cipher therefore means rewriting the decryptor, not just extending a table, and the two
+halves have to ship together. Assessed and deliberately not done.
