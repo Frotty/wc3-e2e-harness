@@ -1,0 +1,48 @@
+package EvalOrderProbe
+import E2E
+import ClosureTimers
+
+/*  Engine evaluation-order probe for `set arr[i] = f()`.
+
+	Wurst's two reference interpreters disagree here: the IM interpreter evaluates the
+	index first, the Jass interpreter the right side first. This suite records what the
+	real game does so optimizers (WurstScriptFork inliner/flatten) can be tuned against
+	the engine instead of a guess. Build the canary in JASS script mode without
+	optimizations for a meaningful answer. */
+
+int array evalArr
+int evalIdx = 0
+string evalTrace = ""
+
+@noinline function bump() returns int
+	evalIdx = evalIdx + 1
+	return evalIdx
+
+@noinline function idxProbe() returns int
+	evalTrace += "i"
+	return 5
+
+@noinline function valProbe() returns int
+	evalTrace += "v"
+	return 7
+
+@noinline public function runEvalOrderProbe()
+	// Probe 1: does the RHS run before or after the index is read?
+	evalArr[evalIdx] = bump()
+	E2E.recordMetric("arr0", evalArr[0])
+	E2E.recordMetric("arr1", evalArr[1])
+	if evalArr[0] == 1
+		E2E.recordEvent("set-array-index-read-first")
+	else if evalArr[1] == 1
+		E2E.recordEvent("set-array-rhs-first")
+	else
+		E2E.recordEvent("set-array-unexpected")
+
+	// Probe 2: order of an index call versus a value call.
+	evalArr[idxProbe()] = valProbe()
+	E2E.recordEvent("set-array-call-order-" + evalTrace)
+	E2E.recordMetric("arr5", evalArr[5])
+	E2E.assertTrue("probe-ran", true)
+	// Let at least one heartbeat go out before finishing.
+	doAfter(3.) ->
+		E2E.finish()

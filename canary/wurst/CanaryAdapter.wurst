@@ -1,6 +1,7 @@
 package CanaryAdapter
 import E2E
 import ClosureTimers
+import EvalOrderProbe
 
 /*  Canary suites (plan: "Native canary suites"). This repository's own map is
 	the canary: it exercises every runtime state against the real game without
@@ -40,6 +41,9 @@ init
 
 	E2E.register("canary-empty") ->
 		E2E.finish()
+
+	E2E.register("canary-eval-order") ->
+		runEvalOrderProbe()
 
 	E2E.bootstrap("canary")
 	if E2E.isActive()

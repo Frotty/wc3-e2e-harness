@@ -1,0 +1,6 @@
+-runcompiletimefunctions
+-injectobjects
+-stacktraces
++opt
++inline
++localOptimizations
