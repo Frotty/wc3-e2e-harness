@@ -226,3 +226,27 @@ value through a `StringHash` table built from the stdlib's `c2s`, and `c2s` stop
 with a UTF-8 lead byte to one marker hash**, so a hash-based table can never tell lead bytes apart.
 Widening the cipher therefore means rewriting the decryptor, not just extending a table, and the two
 halves have to ship together. Assessed and deliberately not done.
+
+## semantics-probe.j — ANSWER (2026-09-22, run in game)
+
+Three questions the audit had left as unverified premises, plus one that fell out of the third.
+
+| question | result |
+|---|---|
+| `i == null` where `i` is an `integer` holding 0 | **TRUE** - null is 0 for an integer |
+| `SquareRoot(-1.)` | `lt=F ge=T notlt=T self=T` - not NaN; it compares as an ordinary number |
+| `"ABC" == "abc"` | **case sensitive** |
+| `StringHash("ABC") == StringHash("abc")` | **case INsensitive** |
+
+**`integer == null` is the same as `== 0`,** so the compiler emitting `i == 0` is faithful.
+
+**`SquareRoot(-1.)` is not NaN.** `r >= 0.` and `r == r` are both true. The concern about
+`not (a < b)` being rewritten to `a >= b` rests on NaN existing; the obvious way to make one does
+not, and division by zero aborts the thread rather than producing one. Not proof that no real can
+ever be NaN, but the premise has nothing behind it so far - and here the two forms agreed.
+
+**String `==` is case sensitive, `StringHash` is not.** Lua's `==` is case sensitive too, so that
+side matches. The hash is upper-cased before hashing (and `/` reads as `\`), which is why w3p's own
+`w3p_charr` builds its table from uppercase characters only and then corrects by +32. The compiler
+already models this: `Wc3StringHash.hash` upper-cases ASCII and maps the slash, and the Lua test
+shim is kept in step with it.
