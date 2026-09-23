@@ -2,6 +2,7 @@ package CanaryAdapter
 import E2E
 import ClosureTimers
 import EvalOrderProbe
+import HashMap
 
 /*  Canary suites (plan: "Native canary suites"). This repository's own map is
 	the canary: it exercises every runtime state against the real game without
@@ -44,6 +45,21 @@ init
 
 	E2E.register("canary-eval-order") ->
 		runEvalOrderProbe()
+
+	E2E.register("canary-hashmap-high-real") ->
+		let values = new HashMap<int, real>
+		let expected = REAL_MAX / 2.
+		values.put(1, expected)
+		let actual = values.get(1)
+		print("HashMap high real expected: " + expected)
+		print("HashMap high real actual: " + actual)
+		E2E.assertTrue("HashMap preserves a high real", actual == expected)
+		destroy values
+		// Let at least one heartbeat go out before finishing, as canary-eval-order does: the canary runner
+		// passes a normal suite only with heartbeats >= 1, and finishing in the RUNNING callback stops the
+		// heartbeat timer before its first tick, so a correct round trip would report CANARY FAIL.
+		doAfter(3.) ->
+			E2E.finish()
 
 	E2E.bootstrap("canary")
 	if E2E.isActive()

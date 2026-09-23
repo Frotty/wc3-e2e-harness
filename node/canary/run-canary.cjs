@@ -25,6 +25,7 @@ const SUITE_TIMEOUTS_MS = {
   "canary-delay": 180_000,
   "canary-empty": 120_000,
   "canary-eval-order": 120_000,
+  "canary-hashmap-high-real": 120_000,
 };
 
 function argumentValue(name, fallback = null) {
