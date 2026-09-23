@@ -59,3 +59,21 @@ test("the digest bounds how many event kinds it prints", () => {
   assert.ok(lines.some((line) => line.includes("20 more kinds")));
   assert.ok(lines.length < 30);
 });
+
+test("a headline id that is not a metric is skipped, even one Object.prototype defines", () => {
+  const lines = digestLines(
+    { verdict: "PASS", payload: { asserts: 1, failed: 0, metrics: { real: 7 } } },
+    { headlineMetrics: ["toString", "constructor", "hasOwnProperty", "real"] },
+  );
+  const text = lines.join("\n");
+  assert.match(text, /^metrics: real=7$/m);
+  assert.doesNotMatch(text, /toString|constructor|function/);
+});
+
+test("a metric whose value is falsy is still a headline", () => {
+  const text = digestLines(
+    { verdict: "PASS", payload: { asserts: 1, failed: 0, metrics: { zero: 0 } } },
+    { headlineMetrics: ["zero"] },
+  ).join("\n");
+  assert.match(text, /metrics: zero=0/);
+});

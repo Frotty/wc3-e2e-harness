@@ -51,7 +51,9 @@ function digestLines(result, { suiteId, artifactDir, headlineMetrics = [], maxEv
   if (payload.failedIds) lines.push(`failed: ${payload.failedIds}`);
 
   const metrics = payload.metrics ?? {};
-  const headline = headlineMetrics.filter((id) => metrics[id] !== undefined).map((id) => `${id}=${metrics[id]}`);
+  // Own keys only: a requested id that is not a metric must not resolve through the prototype, or a name
+  // like `toString` prints a function body as if it were a number.
+  const headline = headlineMetrics.filter((id) => Object.hasOwn(metrics, id)).map((id) => `${id}=${metrics[id]}`);
   if (headline.length > 0) lines.push(`metrics: ${headline.join("  ")}`);
   const metricCount = Object.keys(metrics).length;
   const dropped = payload.metricsDropped ?? 0;
