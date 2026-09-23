@@ -16,6 +16,7 @@ const { createArtifactWriter } = require("../artifacts.cjs");
 const { findWc3Exe, wc3RootFor, findCustomMapData } = require("./paths.cjs");
 const { createWgc, sha1File } = require("./wgc.cjs");
 const win32 = require("./win32.cjs");
+const { collapsingLogger } = require("../output.cjs");
 
 /* The production run loop (plan: "Run Lifecycle"). Sequential phases over a
  * shared step(): process liveness, output-channel poll, lifecycle tick. File
@@ -35,7 +36,20 @@ const QUIT_CLEANUP_MS = 2000;
 
 class RunFailure extends Error {}
 
+/**
+ * Runs one suite. The logger a caller passes is wrapped so repeated lines - the loading phase sends
+ * Space every couple of seconds and logs each one - print once with a count instead of once per send.
+ */
 async function runSuite(options) {
+  const log = collapsingLogger(options.log ?? console.log);
+  try {
+    return await runSuiteWithLog({ ...options, log });
+  } finally {
+    log.flush();
+  }
+}
+
+async function runSuiteWithLog(options) {
   const {
     projectId,
     abilityId,

@@ -123,6 +123,18 @@ window titles.
 - Native canary runs need an interactive Windows session. Existing Warcraft III processes are preserved;
   only processes created by the run are cleaned up.
 
+## Reading a run without flooding your context
+
+A run is long - map load plus the suite itself - and every look at it costs context. Wait for it with
+one blocking command on the runner's output, not by polling `timeline.ndjson` or the log on a timer:
+heartbeats say nothing a reader can act on.
+
+`runSuite` collapses repeated log lines itself (the loading phase logs every Space it sends), so a run's
+stdout stays short. For the result, print `digestLines(result, { suiteId, artifactDir, headlineMetrics })`
+instead of the payload: about ten lines with the verdict, the assert tally, the failed assert ids, the
+event counters and whichever metrics the consumer names. The full payload stays in `result.json`; read
+single values out of it on purpose rather than printing the file.
+
 ## What to inspect after a failure
 
 Each run writes an artifact directory containing `run.json`, `result.json`, `timeline.ndjson`, and any
