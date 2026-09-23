@@ -13,6 +13,7 @@ module.exports = {
   ...require("./src/lifecycle/machine.cjs"),
   ...require("./src/manifest.cjs"),
   ...require("./src/artifacts.cjs"),
+  ...require("./src/output.cjs"),
   ...require("./src/runner/run.cjs"),
   ...require("./src/runner/world-editor.cjs"),
 };
