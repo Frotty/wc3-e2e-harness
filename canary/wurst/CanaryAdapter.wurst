@@ -55,7 +55,11 @@ init
 		print("HashMap high real actual: " + actual)
 		E2E.assertTrue("HashMap preserves a high real", actual == expected)
 		destroy values
-		E2E.finish()
+		// Let at least one heartbeat go out before finishing, as canary-eval-order does: the canary runner
+		// passes a normal suite only with heartbeats >= 1, and finishing in the RUNNING callback stops the
+		// heartbeat timer before its first tick, so a correct round trip would report CANARY FAIL.
+		doAfter(3.) ->
+			E2E.finish()
 
 	E2E.bootstrap("canary")
 	if E2E.isActive()
