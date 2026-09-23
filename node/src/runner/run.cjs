@@ -57,6 +57,12 @@ async function runSuiteWithLog(options) {
     mapPath,
     suiteTimeoutMs,
     wgcSpeed = 0,
+    /* Off by default: a suite that yanks the game in front of whatever the developer is doing, once
+       per launch and again for every loading-screen keypress, is unusable to run in the background.
+       Input does not need it - keys go to the window handle with postKey - and `normalizeGameArgs`
+       guarantees the -nowfpause an unfocused run depends on, whatever game args a caller passes. Turn
+       it on to watch a run, or if a host proves to need the activation. */
+    focus = false,
     gameArgs: rawGameArgs = "-nowfpause -launch",
     slots = [],
     keepOpen = false,
@@ -71,11 +77,7 @@ async function runSuiteWithLog(options) {
   } = options;
 
   // --- Prepare -------------------------------------------------------------
-  // WC3 always runs windowed: fullscreen steals the desktop during automated
-  // runs and changes focus/capture behavior.
-  const gameArgs = rawGameArgs.includes("-windowmode")
-    ? rawGameArgs
-    : `${rawGameArgs} -windowmode windowed`;
+  const gameArgs = normalizeGameArgs(rawGameArgs, { focus });
 
   const wc3Exe = options.wc3Exe ?? findWc3Exe();
   if (!wc3Exe) throw new RunFailure("Warcraft III executable not found");
@@ -196,7 +198,10 @@ async function runSuiteWithLog(options) {
 
   const recoveryLadder = async () => {
     machine.suspendStallDetection(true);
-    await win32.foreground(pid);
+    // The ladder runs when a run is already wedged, so activation earns its cost here even though it
+    // is not the default: a stuck game is the one case where "the window is ignoring posted input" is
+    // a live hypothesis worth ruling out.
+    if (focus) await win32.foreground(pid);
     await win32.postKey(pid, "escape");
     await win32.sleep(MENU_SETTLE_MS);
     await f10Cycle();
@@ -236,7 +241,7 @@ async function runSuiteWithLog(options) {
 
     // --- Window ------------------------------------------------------------
     machine.enter("WINDOW");
-    while ((await win32.foreground(pid)) !== true) {
+    while ((await (focus ? win32.foreground(pid) : win32.hasWindow(pid))) !== true) {
       await step();
     }
 
@@ -247,7 +252,7 @@ async function runSuiteWithLog(options) {
     let lastSpaceAt = 0;
     let spaceCount = 0;
     const sendSpace = async (phase) => {
-      const focused = await win32.foreground(pid);
+      const focused = focus ? await win32.foreground(pid) : null;
       const sent = await win32.postKey(pid, "space");
       artifacts.appendTimeline({ at: Date.now(), event: "input", phase, key: "space", focused, sent });
       log(`  ${phase}: Space (focus=${String(focused)} sent=${String(sent)})`);
@@ -330,7 +335,7 @@ async function runSuiteWithLog(options) {
     // --- Quit: Alt+F4 (no replay to preserve), bounded, then force ----------
     machine.enter("QUIT");
     log("  quitting (Alt+F4)");
-    await win32.foreground(pid);
+    if (focus) await win32.foreground(pid);
     await win32.postKey(pid, "f4", true);
     const quitDeadline = Date.now() + QUIT_GRACE_MS;
     while (win32.isProcessRunning(pid) && Date.now() < quitDeadline) {
@@ -398,6 +403,23 @@ function enterMapLoadConfirmation(machine) {
  * symptom is indistinguishable from a hung map, so the flag is pinned by a test rather than left to
  * whoever next edits this list.
  */
+/**
+ * The game args a run launches with.
+ *
+ * Always windowed: fullscreen steals the desktop during automated runs and changes focus/capture
+ * behavior. And when the run does not take focus, always -nowfpause: Warcraft pauses when its window is
+ * not in front, so an unfocused run without it stalls before LOADED or stops heartbeating. A caller who
+ * passes their own `gameArgs` replaces the defaults, so both are added here rather than trusted to the
+ * default string. With `focus` the window is brought to the front and the caller's args are left alone.
+ */
+function normalizeGameArgs(rawGameArgs, { focus = false } = {}) {
+  const has = (args, flag) => args.split(/\s+/).includes(flag);
+  let args = String(rawGameArgs ?? "").trim();
+  if (!has(args, "-windowmode")) args = `${args} -windowmode windowed`.trim();
+  if (!focus && !has(args, "-nowfpause")) args = `${args} -nowfpause`.trim();
+  return args;
+}
+
 function buildLaunchArgs({ wgcSpeed, loadFile, gameArgs }) {
   if (wgcSpeed > 0) {
     return ["-editor", "-loadfile", loadFile, ...String(gameArgs ?? "").split(/\s+/).filter(Boolean)];
@@ -408,6 +430,7 @@ function buildLaunchArgs({ wgcSpeed, loadFile, gameArgs }) {
 module.exports = {
   runSuite,
   buildLaunchArgs,
+  normalizeGameArgs,
   RunFailure,
   loadingComplete,
   unpauseComplete,
