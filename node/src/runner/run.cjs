@@ -45,9 +45,9 @@ async function runSuite(options) {
     wgcSpeed = 0,
     /* Off by default: a suite that yanks the game in front of whatever the developer is doing, once
        per launch and again for every loading-screen keypress, is unusable to run in the background.
-       Input does not need it - keys go to the window handle with postKey - and the default game args
-       below carry the -nowfpause that an unfocused run depends on. Turn it on to watch a run, or if a
-       host proves to need the activation. */
+       Input does not need it - keys go to the window handle with postKey - and `normalizeGameArgs`
+       guarantees the -nowfpause an unfocused run depends on, whatever game args a caller passes. Turn
+       it on to watch a run, or if a host proves to need the activation. */
     focus = false,
     gameArgs: rawGameArgs = "-nowfpause -launch",
     slots = [],
@@ -63,11 +63,7 @@ async function runSuite(options) {
   } = options;
 
   // --- Prepare -------------------------------------------------------------
-  // WC3 always runs windowed: fullscreen steals the desktop during automated
-  // runs and changes focus/capture behavior.
-  const gameArgs = rawGameArgs.includes("-windowmode")
-    ? rawGameArgs
-    : `${rawGameArgs} -windowmode windowed`;
+  const gameArgs = normalizeGameArgs(rawGameArgs, { focus });
 
   const wc3Exe = options.wc3Exe ?? findWc3Exe();
   if (!wc3Exe) throw new RunFailure("Warcraft III executable not found");
@@ -393,6 +389,23 @@ function enterMapLoadConfirmation(machine) {
  * symptom is indistinguishable from a hung map, so the flag is pinned by a test rather than left to
  * whoever next edits this list.
  */
+/**
+ * The game args a run launches with.
+ *
+ * Always windowed: fullscreen steals the desktop during automated runs and changes focus/capture
+ * behavior. And when the run does not take focus, always -nowfpause: Warcraft pauses when its window is
+ * not in front, so an unfocused run without it stalls before LOADED or stops heartbeating. A caller who
+ * passes their own `gameArgs` replaces the defaults, so both are added here rather than trusted to the
+ * default string. With `focus` the window is brought to the front and the caller's args are left alone.
+ */
+function normalizeGameArgs(rawGameArgs, { focus = false } = {}) {
+  const has = (args, flag) => args.split(/\s+/).includes(flag);
+  let args = String(rawGameArgs ?? "").trim();
+  if (!has(args, "-windowmode")) args = `${args} -windowmode windowed`.trim();
+  if (!focus && !has(args, "-nowfpause")) args = `${args} -nowfpause`.trim();
+  return args;
+}
+
 function buildLaunchArgs({ wgcSpeed, loadFile, gameArgs }) {
   if (wgcSpeed > 0) {
     return ["-editor", "-loadfile", loadFile, ...String(gameArgs ?? "").split(/\s+/).filter(Boolean)];
@@ -403,6 +416,7 @@ function buildLaunchArgs({ wgcSpeed, loadFile, gameArgs }) {
 module.exports = {
   runSuite,
   buildLaunchArgs,
+  normalizeGameArgs,
   RunFailure,
   loadingComplete,
   unpauseComplete,
