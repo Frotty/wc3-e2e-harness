@@ -43,6 +43,12 @@ async function runSuite(options) {
     mapPath,
     suiteTimeoutMs,
     wgcSpeed = 0,
+    /* Off by default: a suite that yanks the game in front of whatever the developer is doing, once
+       per launch and again for every loading-screen keypress, is unusable to run in the background.
+       Input does not need it - keys go to the window handle with postKey - and the default game args
+       below carry the -nowfpause that an unfocused run depends on. Turn it on to watch a run, or if a
+       host proves to need the activation. */
+    focus = false,
     gameArgs: rawGameArgs = "-nowfpause -launch",
     slots = [],
     keepOpen = false,
@@ -182,7 +188,10 @@ async function runSuite(options) {
 
   const recoveryLadder = async () => {
     machine.suspendStallDetection(true);
-    await win32.foreground(pid);
+    // The ladder runs when a run is already wedged, so activation earns its cost here even though it
+    // is not the default: a stuck game is the one case where "the window is ignoring posted input" is
+    // a live hypothesis worth ruling out.
+    if (focus) await win32.foreground(pid);
     await win32.postKey(pid, "escape");
     await win32.sleep(MENU_SETTLE_MS);
     await f10Cycle();
@@ -222,7 +231,7 @@ async function runSuite(options) {
 
     // --- Window ------------------------------------------------------------
     machine.enter("WINDOW");
-    while ((await win32.foreground(pid)) !== true) {
+    while ((await (focus ? win32.foreground(pid) : win32.hasWindow(pid))) !== true) {
       await step();
     }
 
@@ -233,7 +242,7 @@ async function runSuite(options) {
     let lastSpaceAt = 0;
     let spaceCount = 0;
     const sendSpace = async (phase) => {
-      const focused = await win32.foreground(pid);
+      const focused = focus ? await win32.foreground(pid) : null;
       const sent = await win32.postKey(pid, "space");
       artifacts.appendTimeline({ at: Date.now(), event: "input", phase, key: "space", focused, sent });
       log(`  ${phase}: Space (focus=${String(focused)} sent=${String(sent)})`);
@@ -316,7 +325,7 @@ async function runSuite(options) {
     // --- Quit: Alt+F4 (no replay to preserve), bounded, then force ----------
     machine.enter("QUIT");
     log("  quitting (Alt+F4)");
-    await win32.foreground(pid);
+    if (focus) await win32.foreground(pid);
     await win32.postKey(pid, "f4", true);
     const quitDeadline = Date.now() + QUIT_GRACE_MS;
     while (win32.isProcessRunning(pid) && Date.now() < quitDeadline) {

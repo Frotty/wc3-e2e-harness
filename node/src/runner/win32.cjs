@@ -251,6 +251,15 @@ async function foreground(pid) {
   }
 }
 
+/* Whether the process has a window yet, WITHOUT activating it.
+
+   Everything foreground() gives a caller that is only waiting for the window to exist, minus the
+   activation. An empty title is still a window, so only a null (the lookup failed) means "not there
+   yet". */
+async function hasWindow(pid) {
+  return (await windowTitle(pid)) !== null;
+}
+
 async function screenshot(pid, outPath) {
   try {
     fs.mkdirSync(path.dirname(outPath), { recursive: true });
@@ -283,6 +292,7 @@ module.exports = {
   agent,
   postKey,
   foreground,
+  hasWindow,
   screenshot,
   killAllWc3,
   killWc3PidsExcept,
