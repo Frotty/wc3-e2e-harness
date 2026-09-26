@@ -110,19 +110,23 @@ function vectorsVec2()
 // ---------------------------------------------------------------------------
 
 group enumGroup = CreateGroup()
+// All three enumeration blocks count into globals: the closure block cannot write
+// a captured local, so the references count the same way to stay comparable.
+int foundByNative = 0
+int foundBySpatial = 0
 
 function enumNative()
-	var found = 0
+	foundByNative = 0
 	start("enum-range-native")
 	for q = 1 to QUERIES
 		GroupEnumUnitsInRange(enumGroup, -2000. + (q mod 16) * 32., 2000., QUERY_RADIUS, null)
 		var u = FirstOfGroup(enumGroup)
 		while u != null
-			found++
+			foundByNative++
 			GroupRemoveUnit(enumGroup, u)
 			u = FirstOfGroup(enumGroup)
 	stop("enum-range-native")
-	checksum += found
+	checksum += foundByNative
 
 int foundByClosure = 0
 
@@ -136,16 +140,18 @@ function enumClosure()
 	checksum += foundByClosure
 
 function enumSpatial()
-	var found = 0
+	foundBySpatial = 0
 	let result = new ArrayList<unit>()
 	start("enum-range-spatial-index")
 	for q = 1 to QUERIES
 		result.clear()
 		unitsInRange(result, vec2(-2000. + (q mod 16) * 32., 2000.), QUERY_RADIUS)
-		found += result.size()
+		for i = 0 to result.size() - 1
+			if result.get(i) != null
+				foundBySpatial++
 	stop("enum-range-spatial-index")
 	destroy result
-	checksum += found
+	checksum += foundBySpatial
 
 // ---------------------------------------------------------------------------
 // Scheduling closure timers (only the scheduling is timed; they fire later)
