@@ -38,10 +38,11 @@ jobs:
       # in-game suite callback from wurstscript/WurstStdlib2#480. Until that merges,
       # move the stdlib dependency onto that branch. Remove this step afterwards.
       - name: Use the stdlib branch with KeyedMap (WurstStdlib2#480)
-        working-directory: canary/_build/dependencies/wurstStdlib2
-        run: |
-          git fetch --depth=1 origin unitindexer-keyed-map
-          git checkout --detach FETCH_HEAD
+        uses: actions/checkout@v4
+        with:
+          repository: wurstscript/WurstStdlib2
+          ref: unitindexer-keyed-map
+          path: canary/_build/dependencies/wurstStdlib2
 
       - name: Build canary map
         working-directory: canary
