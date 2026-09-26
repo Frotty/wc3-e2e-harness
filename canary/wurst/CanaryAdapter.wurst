@@ -6,6 +6,7 @@ import HashMap
 import StdlibIngameTests
 import UnitIndexBench
 import CollectionsBench
+import GroupBench
 import HashMapLeakProbe
 import StdlibHotBench
 
@@ -21,6 +22,7 @@ import StdlibHotBench
 	stdlib-ingame the standard library's own in-game suite, one assert per check
 	bench-unit-index   per-unit index stores timed against each other
 	bench-collections  ArrayList and LinkedList timed against a bare array
+	bench-groups       the ways of iterating a unit group
 	leak-hashmap       Lua memory an old-generic HashMap/HashSet keeps after destroy
 	bench-stdlib-hot   strings, vectors, unit enumeration and timers against natives
 
@@ -96,6 +98,11 @@ init
 			doAfter(3.) ->
 				E2E.finish()
 
+	E2E.register("bench-groups") ->
+		doAfter(2.5) ->
+			runGroupBench()
+			doAfter(3.) ->
+				E2E.finish()
 	E2E.register("leak-hashmap") ->
 		doAfter(2.5) ->
 			runHashMapLeakProbe()
