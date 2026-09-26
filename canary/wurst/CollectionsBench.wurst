@@ -2,6 +2,10 @@ package CollectionsBench
 import E2E
 import ArrayList
 import LinkedList
+import HashMap
+import HashSet
+import IntMap
+import Table
 import UnitIds
 import ErrorHandling
 import Execute
@@ -50,6 +54,16 @@ function readRawInts()
 			sum += rawInts[i]
 	stop("read-int-array")
 	checksum += sum
+
+/** The closure blocks below cannot write a captured local (captures are by value),
+	so each element updates the global checksum there. This control does the same
+	per-element global write over a bare array; subtract it to isolate traversal. */
+function readRawIntsGlobalSum()
+	start("read-int-array-global-sum")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			checksum += rawInts[i]
+	stop("read-int-array-global-sum")
 
 function readArrayListGet(ArrayList<int> list)
 	var sum = 0
@@ -226,6 +240,78 @@ function appendLinkedListAdd()
 	checksum += sum
 
 // ---------------------------------------------------------------------------
+// Int-keyed lookups and updates: N sparse keys, like handle ids or object ids,
+// ROUNDS times. The bare array is indexed densely as the reference.
+// ---------------------------------------------------------------------------
+
+function lookupRawInts()
+	var sum = 0
+	start("lookup-int-array")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			sum += rawInts[i]
+	stop("lookup-int-array")
+	checksum += sum
+
+function lookupTable(Table table)
+	var sum = 0
+	start("lookup-int-table")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			sum += table.loadInt(100000 + i * 7919)
+	stop("lookup-int-table")
+	checksum += sum
+
+function lookupHashMap(HashMap<int, int> map)
+	var sum = 0
+	start("lookup-int-hashmap")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			sum += map.get(100000 + i * 7919)
+	stop("lookup-int-hashmap")
+	checksum += sum
+
+function lookupIntMap(IntMap<int> map)
+	var sum = 0
+	start("lookup-int-intmap")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			sum += map.get(100000 + i * 7919)
+	stop("lookup-int-intmap")
+	checksum += sum
+
+function containsHashSet(HashSet<int> set)
+	var sum = 0
+	start("contains-int-hashset")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			if set.has(100000 + i * 7919)
+				sum++
+	stop("contains-int-hashset")
+	checksum += sum
+
+function updateTable(Table table)
+	start("update-int-table")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			table.saveInt(100000 + i * 7919, r + i)
+	stop("update-int-table")
+
+function updateHashMap(HashMap<int, int> map)
+	start("update-int-hashmap")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			map.put(100000 + i * 7919, r + i)
+	stop("update-int-hashmap")
+
+function updateIntMap(IntMap<int> map)
+	start("update-int-intmap")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			map.put(100000 + i * 7919, r + i)
+	stop("update-int-intmap")
+
+// ---------------------------------------------------------------------------
 
 function guarded(string block, ForForceCallback body)
 	let ok = try(body)
@@ -256,6 +342,7 @@ public function runCollectionsBench()
 	// Each block runs guarded: a block which crashes fails its own assertion
 	// instead of killing the thread and stalling the suite.
 	guarded("read-int-array", () -> readRawInts())
+	guarded("read-int-array-global-sum", () -> readRawIntsGlobalSum())
 	guarded("read-int-arraylist-get", () -> readArrayListGet(intList))
 	guarded("read-int-arraylist-index", () -> readArrayListIndex(intList))
 	guarded("read-int-arraylist-size-bound", () -> readArrayListSizeInLoop(intList))
@@ -273,6 +360,28 @@ public function runCollectionsBench()
 	guarded("append-int-arraylist-add", () -> appendArrayListAdd())
 	guarded("append-int-arraylist-unsafeadd", () -> appendArrayListUnsafeAdd())
 	guarded("append-int-linkedlist-add", () -> appendLinkedListAdd())
+
+	let table = new Table()
+	let hashMap = new HashMap<int, int>()
+	let intMap = new IntMap<int>()
+	let hashSet = new HashSet<int>()
+	for i = 0 to N - 1
+		table.saveInt(100000 + i * 7919, i)
+		hashMap.put(100000 + i * 7919, i)
+		intMap.put(100000 + i * 7919, i)
+		hashSet.add(100000 + i * 7919)
+	guarded("lookup-int-array", () -> lookupRawInts())
+	guarded("lookup-int-table", () -> lookupTable(table))
+	guarded("lookup-int-hashmap", () -> lookupHashMap(hashMap))
+	guarded("lookup-int-intmap", () -> lookupIntMap(intMap))
+	guarded("contains-int-hashset", () -> containsHashSet(hashSet))
+	guarded("update-int-table", () -> updateTable(table))
+	guarded("update-int-hashmap", () -> updateHashMap(hashMap))
+	guarded("update-int-intmap", () -> updateIntMap(intMap))
+	destroy table
+	destroy hashMap
+	destroy intMap
+	destroy hashSet
 
 	destroy intList
 	destroy intLinked

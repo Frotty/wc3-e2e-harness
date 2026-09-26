@@ -86,6 +86,10 @@ public function runUnitIndexBench()
 	for i = 0 to UNIT_COUNT - 1
 		units[i] = CreateUnit(players[0], UnitIds.footman, -2000. + i * 16., 2000., 0.)
 	checksum = 0
+	// A fresh "empty" block anchors this run for the marker reader and measures
+	// the marker overhead; without it a previous suite's markers would count.
+	marker("empty-start")
+	marker("empty-end")
 	benchHashMap()
 	benchUserData()
 	benchKeyedMap()
