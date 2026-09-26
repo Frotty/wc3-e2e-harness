@@ -20,7 +20,9 @@ group units = CreateGroup()
 group scratch = CreateGroup()
 unit array spawned
 var checksum = 0
-int closureSeen = 0
+// Every block counts into a global: the closure block cannot write a captured
+// local, so the others count the same way to stay comparable.
+int seen = 0
 
 function marker(string name)
 	PreloadGenClear()
@@ -35,7 +37,7 @@ function stop(string block)
 	marker(block + "-end")
 
 function iterForIn()
-	var seen = 0
+	seen = 0
 	start("group-for-in")
 	for l = 1 to LOOPS
 		for u in units
@@ -45,7 +47,7 @@ function iterForIn()
 	checksum += seen
 
 function iterIndex()
-	var seen = 0
+	seen = 0
 	start("group-index-loop")
 	for l = 1 to LOOPS
 		let n = BlzGroupGetSize(units)
@@ -56,17 +58,17 @@ function iterIndex()
 	checksum += seen
 
 function iterForEachIn()
-	closureSeen = 0
+	seen = 0
 	start("group-foreach-in")
 	for l = 1 to LOOPS
 		units.forEachIn() u ->
 			if u != null
-				closureSeen++
+				seen++
 	stop("group-foreach-in")
-	checksum += closureSeen
+	checksum += seen
 
 function iterFromCopy()
-	var seen = 0
+	seen = 0
 	start("group-for-from-copy")
 	for l = 1 to LOOPS
 		GroupAddGroup(units, scratch)
