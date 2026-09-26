@@ -1,0 +1,5 @@
+package StdlibIngameTests_config
+
+/* The canary runs the standard library's in-game suite as an E2E suite (see
+   CanaryAdapter), so the package must not also start it on its own. */
+@config public constant STDLIB_INGAME_TESTS_AUTORUN = false

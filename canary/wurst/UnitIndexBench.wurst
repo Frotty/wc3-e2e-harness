@@ -1,0 +1,97 @@
+package UnitIndexBench
+import E2E
+import HashMap
+import KeyedMap
+import UnitIds
+
+/*	Benchmarks the three ways a per-unit integer index can be stored on the
+	Lua target, in the real game:
+
+	  hashmap   the old-generic HashMap<unit, int> (UnitIndexer before this change)
+	  userdata  the unit's native user-data slot (the Jass way)
+	  keyedmap  the KeyedMap intrinsics, one native Lua table keyed by the unit
+
+	Warcraft's Lua has no wall clock, so each block is bracketed by two
+	Preload marker files; the runner reads their modification times. Every
+	block does the same number of reads and writes and the results are folded
+	into a checksum metric so nothing can be optimised away. */
+
+constant UNIT_COUNT = 64
+constant READS_PER_UNIT = 40000
+constant WRITE_CYCLES = 20000
+
+unit array units
+var checksum = 0
+
+function marker(string name)
+	PreloadGenClear()
+	PreloadGenStart()
+	Preload(name)
+	PreloadGenEnd("wc3-e2e/canary/bench-" + name + ".txt")
+
+function benchHashMap()
+	let map = new HashMap<unit, int>
+	for i = 0 to UNIT_COUNT - 1
+		map.put(units[i], i + 1)
+	marker("hashmap-read-start")
+	for r = 0 to READS_PER_UNIT - 1
+		for i = 0 to UNIT_COUNT - 1
+			checksum += map.get(units[i])
+	marker("hashmap-read-end")
+	marker("hashmap-write-start")
+	for c = 0 to WRITE_CYCLES - 1
+		for i = 0 to UNIT_COUNT - 1
+			map.put(units[i], c + i)
+	marker("hashmap-write-end")
+	for i = 0 to UNIT_COUNT - 1
+		checksum += map.get(units[i])
+	destroy map
+
+function benchUserData()
+	for i = 0 to UNIT_COUNT - 1
+		units[i].setUserData(i + 1)
+	marker("userdata-read-start")
+	for r = 0 to READS_PER_UNIT - 1
+		for i = 0 to UNIT_COUNT - 1
+			checksum += units[i].getUserData()
+	marker("userdata-read-end")
+	marker("userdata-write-start")
+	for c = 0 to WRITE_CYCLES - 1
+		for i = 0 to UNIT_COUNT - 1
+			units[i].setUserData(c + i)
+	marker("userdata-write-end")
+	for i = 0 to UNIT_COUNT - 1
+		checksum += units[i].getUserData()
+		units[i].setUserData(0)
+
+function benchKeyedMap()
+	let map = keyedMapCreate()
+	for i = 0 to UNIT_COUNT - 1
+		keyedMapPut(map, units[i], i + 1)
+	marker("keyedmap-read-start")
+	for r = 0 to READS_PER_UNIT - 1
+		for i = 0 to UNIT_COUNT - 1
+			checksum += keyedMapGetInt(map, units[i])
+	marker("keyedmap-read-end")
+	marker("keyedmap-write-start")
+	for c = 0 to WRITE_CYCLES - 1
+		for i = 0 to UNIT_COUNT - 1
+			keyedMapPut(map, units[i], c + i)
+	marker("keyedmap-write-end")
+	for i = 0 to UNIT_COUNT - 1
+		checksum += keyedMapGetInt(map, units[i])
+	keyedMapDestroy(map)
+
+public function runUnitIndexBench()
+	for i = 0 to UNIT_COUNT - 1
+		units[i] = CreateUnit(players[0], UnitIds.footman, -2000. + i * 16., 2000., 0.)
+	checksum = 0
+	benchHashMap()
+	benchUserData()
+	benchKeyedMap()
+	E2E.recordMetric("reads", (READS_PER_UNIT * UNIT_COUNT).toReal())
+	E2E.recordMetric("writes", (WRITE_CYCLES * UNIT_COUNT).toReal())
+	E2E.recordMetric("checksum", checksum.toReal())
+	E2E.assertTrue("bench-ran", checksum != 0)
+	for i = 0 to UNIT_COUNT - 1
+		RemoveUnit(units[i])
