@@ -30,6 +30,11 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # The image carries the compiler it was built with. The canary exercises the
+      # toolchain, so build it with the current nightly compiler instead.
+      - name: Update the WurstScript compiler to the current nightly
+        run: grill install wurstscript
+
       - name: Install canary dependencies (pulls this repo from GitHub)
         working-directory: canary
         run: grill install
