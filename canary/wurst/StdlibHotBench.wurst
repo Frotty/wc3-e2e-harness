@@ -256,32 +256,63 @@ function guarded(string block, ForForceCallback body)
 	if not ok
 		print("bench block " + block + " crashed: " + lastError)
 
-public function runStdlibHotBench()
-	start("empty")
-	stop("empty")
-	for i = 0 to UNIT_COUNT - 1
-		units[i] = CreateUnit(players[0], UnitIds.footman, -2000. + (i mod 16) * 32., 2000. + (i div 16) * 32., 0.)
+/*	The blocks run one at a time instead of back to back: all of them together
+	block the game for over ten seconds, and the map's heartbeat, which the
+	runner watches for stalls, only goes out between them. The E2E heartbeat is a
+	2 s game-time timer and a block advances no game time, so the gap between
+	blocks is a little longer than that: every gap lets one heartbeat out. */
+constant BLOCK_GAP = 2.2
+string array queuedNames
+ForForceCallback array queuedBodies
+int queuedCount = 0
+int queuedNext = 0
 
-	guarded("string-concat-i2s", () -> stringsNative())
-	guarded("string-concat-tostring", () -> stringsToString())
-	guarded("string-concat-three", () -> stringsThreeParts())
-	guarded("vector-polar-reals", () -> vectorsReals())
-	guarded("vector-polar-vec2", () -> vectorsVec2())
-	guarded("enum-range-native", () -> enumNative())
-	guarded("enum-range-forunitsinrange", () -> enumClosure())
-	guarded("enum-range-spatial-index", () -> enumSpatial())
-	guarded("timer-schedule-native", () -> timersNative())
-	guarded("timer-schedule-doafter", () -> timersDoAfter())
-	guarded("timer-data-setget", () -> timerDataSetGet())
-	damageSetup()
-	guarded("damage-no-listener", () -> damageNoListener())
-	guarded("damage-plus-raw-trigger", () -> damageRawTrigger())
-	guarded("damage-one-listener", () -> damageOneListener())
+function queue(string block, ForForceCallback body)
+	queuedNames[queuedCount] = block
+	queuedBodies[queuedCount] = body
+	queuedCount++
+
+function runNext()
+	if queuedNext < queuedCount
+		let i = queuedNext
+		queuedNext++
+		guarded(queuedNames[i], queuedBodies[i])
+		doAfter(BLOCK_GAP) ->
+			runNext()
+	else
+		finishBench()
+
+function finishBench()
 	RemoveUnit(damageSource)
 	RemoveUnit(damageTarget)
-
 	for i = 0 to UNIT_COUNT - 1
 		RemoveUnit(units[i])
 	E2E.recordMetric("checksum", checksum.toReal())
 	E2E.recordMetric("realChecksum", realChecksum)
 	E2E.assertTrue("bench-ran", checksum != 0)
+	doAfter(3.) ->
+		E2E.finish()
+
+/** Runs every block, one per timer tick, and finishes the E2E suite. */
+public function runStdlibHotBench()
+	start("empty")
+	stop("empty")
+	for i = 0 to UNIT_COUNT - 1
+		units[i] = CreateUnit(players[0], UnitIds.footman, -2000. + (i mod 16) * 32., 2000. + (i div 16) * 32., 0.)
+	damageSetup()
+
+	queue("string-concat-i2s", () -> stringsNative())
+	queue("string-concat-tostring", () -> stringsToString())
+	queue("string-concat-three", () -> stringsThreeParts())
+	queue("vector-polar-reals", () -> vectorsReals())
+	queue("vector-polar-vec2", () -> vectorsVec2())
+	queue("enum-range-native", () -> enumNative())
+	queue("enum-range-forunitsinrange", () -> enumClosure())
+	queue("enum-range-spatial-index", () -> enumSpatial())
+	queue("timer-schedule-native", () -> timersNative())
+	queue("timer-schedule-doafter", () -> timersDoAfter())
+	queue("timer-data-setget", () -> timerDataSetGet())
+	queue("damage-no-listener", () -> damageNoListener())
+	queue("damage-plus-raw-trigger", () -> damageRawTrigger())
+	queue("damage-one-listener", () -> damageOneListener())
+	runNext()

@@ -95,10 +95,9 @@ init
 				E2E.finish()
 
 	E2E.register("bench-stdlib-hot") ->
+		// Finishes the suite itself, after its last block.
 		doAfter(2.5) ->
 			runStdlibHotBench()
-			doAfter(3.) ->
-				E2E.finish()
 
 	E2E.register("bench-collections") ->
 		// The bench blocks the game thread for seconds, so it starts only once the
