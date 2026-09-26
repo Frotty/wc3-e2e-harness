@@ -28,6 +28,7 @@ const SUITE_TIMEOUTS_MS = {
   "canary-hashmap-high-real": 120_000,
   "stdlib-ingame": 240_000,
   "bench-unit-index": 600_000,
+  "bench-collections": 600_000,
 };
 
 function argumentValue(name, fallback = null) {

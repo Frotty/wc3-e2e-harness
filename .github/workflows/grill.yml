@@ -30,19 +30,14 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # The image carries the compiler it was built with. The canary exercises the
+      # toolchain, so build it with the current nightly compiler instead.
+      - name: Update the WurstScript compiler to the current nightly
+        run: grill install wurstscript
+
       - name: Install canary dependencies (pulls this repo from GitHub)
         working-directory: canary
         run: grill install
-
-      # The canary's stdlib-ingame and bench-unit-index suites need KeyedMap and the
-      # in-game suite callback from wurstscript/WurstStdlib2#480. Until that merges,
-      # move the stdlib dependency onto that branch. Remove this step afterwards.
-      - name: Use the stdlib branch with KeyedMap (WurstStdlib2#480)
-        uses: actions/checkout@v4
-        with:
-          repository: wurstscript/WurstStdlib2
-          ref: unitindexer-keyed-map
-          path: canary/_build/dependencies/wurstStdlib2
 
       - name: Build canary map
         working-directory: canary

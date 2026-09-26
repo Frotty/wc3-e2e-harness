@@ -1,0 +1,396 @@
+package CollectionsBench
+import E2E
+import ArrayList
+import LinkedList
+import HashMap
+import HashSet
+import IntMap
+import Table
+import UnitIds
+import ErrorHandling
+import Execute
+
+/*	Benchmarks the standard library's list types against a bare array, in the
+	real game, on the Lua target.
+
+	Every block runs the same element count and folds its results into a
+	checksum metric so nothing can be optimised away. Warcraft's Lua has no
+	wall clock, so each block is bracketed by two Preload marker files and the
+	runner reads their modification times (node/canary/read-bench-markers.cjs).
+	An empty block measures the marker overhead itself. */
+
+constant N = 1000
+/** Read and write blocks touch N * ROUNDS elements. */
+constant ROUNDS = 2000
+/** Append blocks build a list of N elements this many times. */
+constant APPEND_ROUNDS = 400
+
+int array rawInts
+unit array rawUnits
+unit array spawned
+var checksum = 0
+
+function marker(string name)
+	PreloadGenClear()
+	PreloadGenStart()
+	Preload(name)
+	PreloadGenEnd("wc3-e2e/canary/bench-" + name + ".txt")
+
+function start(string block)
+	marker(block + "-start")
+
+function stop(string block)
+	marker(block + "-end")
+
+// ---------------------------------------------------------------------------
+// Reads
+// ---------------------------------------------------------------------------
+
+function readRawInts()
+	var sum = 0
+	start("read-int-array")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			sum += rawInts[i]
+	stop("read-int-array")
+	checksum += sum
+
+/** The closure blocks below cannot write a captured local (captures are by value),
+	so each element updates the global checksum there. This control does the same
+	per-element global write over a bare array; subtract it to isolate traversal. */
+function readRawIntsGlobalSum()
+	start("read-int-array-global-sum")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			checksum += rawInts[i]
+	stop("read-int-array-global-sum")
+
+function readArrayListGet(ArrayList<int> list)
+	var sum = 0
+	start("read-int-arraylist-get")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			sum += list.get(i)
+	stop("read-int-arraylist-get")
+	checksum += sum
+
+function readArrayListIndex(ArrayList<int> list)
+	var sum = 0
+	start("read-int-arraylist-index")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			sum += list[i]
+	stop("read-int-arraylist-index")
+	checksum += sum
+
+function readArrayListSizeInLoop(ArrayList<int> list)
+	var sum = 0
+	start("read-int-arraylist-size-bound")
+	for r = 1 to ROUNDS
+		for i = 0 to list.size() - 1
+			sum += list.get(i)
+	stop("read-int-arraylist-size-bound")
+	checksum += sum
+
+function readArrayListForEach(ArrayList<int> list)
+	start("read-int-arraylist-foreach")
+	for r = 1 to ROUNDS
+		list.forEach(e -> begin
+			checksum += e
+		end)
+	stop("read-int-arraylist-foreach")
+
+function readLinkedListForIn(LinkedList<int> list)
+	var sum = 0
+	start("read-int-linkedlist-forin")
+	for r = 1 to ROUNDS
+		for e in list
+			sum += e
+	stop("read-int-linkedlist-forin")
+	checksum += sum
+
+function readLinkedListStaticItr(LinkedList<int> list)
+	var sum = 0
+	start("read-int-linkedlist-staticitr")
+	for r = 1 to ROUNDS
+		let itr = list.staticItr()
+		while itr.hasNext()
+			sum += itr.next()
+	stop("read-int-linkedlist-staticitr")
+	checksum += sum
+
+function readLinkedListForEach(LinkedList<int> list)
+	start("read-int-linkedlist-foreach")
+	for r = 1 to ROUNDS
+		list.forEach(e -> begin
+			checksum += e
+		end)
+	stop("read-int-linkedlist-foreach")
+
+// Handle elements: the old-generic LinkedList converts every element through
+// its int index, the new-generic ArrayList stores the handle itself.
+
+function readRawUnits()
+	var sum = 0
+	start("read-unit-array")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			if rawUnits[i] != null
+				sum++
+	stop("read-unit-array")
+	checksum += sum
+
+function readUnitArrayList(ArrayList<unit> list)
+	var sum = 0
+	start("read-unit-arraylist-get")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			if list.get(i) != null
+				sum++
+	stop("read-unit-arraylist-get")
+	checksum += sum
+
+function readUnitLinkedList(LinkedList<unit> list)
+	var sum = 0
+	start("read-unit-linkedlist-forin")
+	for r = 1 to ROUNDS
+		for u in list
+			if u != null
+				sum++
+	stop("read-unit-linkedlist-forin")
+	checksum += sum
+
+// ---------------------------------------------------------------------------
+// Writes in place
+// ---------------------------------------------------------------------------
+
+function writeRawInts()
+	start("write-int-array")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			rawInts[i] = r + i
+	stop("write-int-array")
+
+function writeArrayListSet(ArrayList<int> list)
+	start("write-int-arraylist-set")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			list.set(i, r + i)
+	stop("write-int-arraylist-set")
+
+function writeLinkedListUpdateAll(LinkedList<int> list)
+	start("write-int-linkedlist-updateall")
+	for r = 1 to ROUNDS
+		list.updateAll(e -> e + 1)
+	stop("write-int-linkedlist-updateall")
+
+// ---------------------------------------------------------------------------
+// Appends: build a list of N elements from empty, APPEND_ROUNDS times
+// ---------------------------------------------------------------------------
+
+function appendRawInts()
+	var sum = 0
+	start("append-int-array")
+	for r = 1 to APPEND_ROUNDS
+		var count = 0
+		for i = 0 to N - 1
+			rawInts[count] = i
+			count++
+		sum += count
+	stop("append-int-array")
+	checksum += sum
+
+function appendArrayListAdd()
+	let list = new ArrayList<int>()
+	var sum = 0
+	start("append-int-arraylist-add")
+	for r = 1 to APPEND_ROUNDS
+		list.clear()
+		for i = 0 to N - 1
+			list.add(i)
+		sum += list.size()
+	stop("append-int-arraylist-add")
+	checksum += sum
+	destroy list
+
+function appendArrayListUnsafeAdd()
+	let list = new ArrayList<int>()
+	var sum = 0
+	start("append-int-arraylist-unsafeadd")
+	for r = 1 to APPEND_ROUNDS
+		list.clear()
+		list.reserve(N)
+		for i = 0 to N - 1
+			list.unsafeAdd(i)
+		sum += list.size()
+	stop("append-int-arraylist-unsafeadd")
+	checksum += sum
+	destroy list
+
+function appendLinkedListAdd()
+	var sum = 0
+	start("append-int-linkedlist-add")
+	for r = 1 to APPEND_ROUNDS
+		let list = new LinkedList<int>()
+		for i = 0 to N - 1
+			list.add(i)
+		sum += list.size()
+		destroy list
+	stop("append-int-linkedlist-add")
+	checksum += sum
+
+// ---------------------------------------------------------------------------
+// Int-keyed lookups and updates: N sparse keys, like handle ids or object ids,
+// ROUNDS times. The bare array is indexed densely as the reference.
+// ---------------------------------------------------------------------------
+
+function lookupRawInts()
+	var sum = 0
+	start("lookup-int-array")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			sum += rawInts[i]
+	stop("lookup-int-array")
+	checksum += sum
+
+function lookupTable(Table table)
+	var sum = 0
+	start("lookup-int-table")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			sum += table.loadInt(100000 + i * 7919)
+	stop("lookup-int-table")
+	checksum += sum
+
+function lookupHashMap(HashMap<int, int> map)
+	var sum = 0
+	start("lookup-int-hashmap")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			sum += map.get(100000 + i * 7919)
+	stop("lookup-int-hashmap")
+	checksum += sum
+
+function lookupIntMap(IntMap<int> map)
+	var sum = 0
+	start("lookup-int-intmap")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			sum += map.get(100000 + i * 7919)
+	stop("lookup-int-intmap")
+	checksum += sum
+
+function containsHashSet(HashSet<int> set)
+	var sum = 0
+	start("contains-int-hashset")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			if set.has(100000 + i * 7919)
+				sum++
+	stop("contains-int-hashset")
+	checksum += sum
+
+function updateTable(Table table)
+	start("update-int-table")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			table.saveInt(100000 + i * 7919, r + i)
+	stop("update-int-table")
+
+function updateHashMap(HashMap<int, int> map)
+	start("update-int-hashmap")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			map.put(100000 + i * 7919, r + i)
+	stop("update-int-hashmap")
+
+function updateIntMap(IntMap<int> map)
+	start("update-int-intmap")
+	for r = 1 to ROUNDS
+		for i = 0 to N - 1
+			map.put(100000 + i * 7919, r + i)
+	stop("update-int-intmap")
+
+// ---------------------------------------------------------------------------
+
+function guarded(string block, ForForceCallback body)
+	let ok = try(body)
+	E2E.assertTrue(block, ok)
+	if not ok
+		print("bench block " + block + " crashed: " + lastError)
+
+public function runCollectionsBench()
+	start("empty")
+	stop("empty")
+
+	let intList = new ArrayList<int>()
+	let intLinked = new LinkedList<int>()
+	let unitList = new ArrayList<unit>()
+	let unitLinked = new LinkedList<unit>()
+	for i = 0 to N - 1
+		rawInts[i] = i
+		intList.add(i)
+		intLinked.add(i)
+	// A few real units, repeated, so handle reads see live handles.
+	for i = 0 to 15
+		spawned[i] = CreateUnit(players[0], UnitIds.footman, -2000. + i * 32., 2000., 0.)
+	for i = 0 to N - 1
+		rawUnits[i] = spawned[i mod 16]
+		unitList.add(spawned[i mod 16])
+		unitLinked.add(spawned[i mod 16])
+
+	// Each block runs guarded: a block which crashes fails its own assertion
+	// instead of killing the thread and stalling the suite.
+	guarded("read-int-array", () -> readRawInts())
+	guarded("read-int-array-global-sum", () -> readRawIntsGlobalSum())
+	guarded("read-int-arraylist-get", () -> readArrayListGet(intList))
+	guarded("read-int-arraylist-index", () -> readArrayListIndex(intList))
+	guarded("read-int-arraylist-size-bound", () -> readArrayListSizeInLoop(intList))
+	guarded("read-int-arraylist-foreach", () -> readArrayListForEach(intList))
+	guarded("read-int-linkedlist-forin", () -> readLinkedListForIn(intLinked))
+	guarded("read-int-linkedlist-staticitr", () -> readLinkedListStaticItr(intLinked))
+	guarded("read-int-linkedlist-foreach", () -> readLinkedListForEach(intLinked))
+	guarded("read-unit-array", () -> readRawUnits())
+	guarded("read-unit-arraylist-get", () -> readUnitArrayList(unitList))
+	guarded("read-unit-linkedlist-forin", () -> readUnitLinkedList(unitLinked))
+	guarded("write-int-array", () -> writeRawInts())
+	guarded("write-int-arraylist-set", () -> writeArrayListSet(intList))
+	guarded("write-int-linkedlist-updateall", () -> writeLinkedListUpdateAll(intLinked))
+	guarded("append-int-array", () -> appendRawInts())
+	guarded("append-int-arraylist-add", () -> appendArrayListAdd())
+	guarded("append-int-arraylist-unsafeadd", () -> appendArrayListUnsafeAdd())
+	guarded("append-int-linkedlist-add", () -> appendLinkedListAdd())
+
+	let table = new Table()
+	let hashMap = new HashMap<int, int>()
+	let intMap = new IntMap<int>()
+	let hashSet = new HashSet<int>()
+	for i = 0 to N - 1
+		table.saveInt(100000 + i * 7919, i)
+		hashMap.put(100000 + i * 7919, i)
+		intMap.put(100000 + i * 7919, i)
+		hashSet.add(100000 + i * 7919)
+	guarded("lookup-int-array", () -> lookupRawInts())
+	guarded("lookup-int-table", () -> lookupTable(table))
+	guarded("lookup-int-hashmap", () -> lookupHashMap(hashMap))
+	guarded("lookup-int-intmap", () -> lookupIntMap(intMap))
+	guarded("contains-int-hashset", () -> containsHashSet(hashSet))
+	guarded("update-int-table", () -> updateTable(table))
+	guarded("update-int-hashmap", () -> updateHashMap(hashMap))
+	guarded("update-int-intmap", () -> updateIntMap(intMap))
+	destroy table
+	destroy hashMap
+	destroy intMap
+	destroy hashSet
+
+	destroy intList
+	destroy intLinked
+	destroy unitList
+	destroy unitLinked
+	for i = 0 to 15
+		RemoveUnit(spawned[i])
+	E2E.recordMetric("elements", N.toReal())
+	E2E.recordMetric("rounds", ROUNDS.toReal())
+	E2E.recordMetric("appendRounds", APPEND_ROUNDS.toReal())
+	E2E.recordMetric("checksum", checksum.toReal())
+	E2E.assertTrue("bench-ran", checksum != 0)
