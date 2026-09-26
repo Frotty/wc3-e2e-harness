@@ -4,6 +4,7 @@ import ClosureTimers
 import EvalOrderProbe
 import HashMap
 import StdlibIngameTests
+import UnitIndexBench
 
 /*  Canary suites (plan: "Native canary suites"). This repository's own map is
 	the canary: it exercises every runtime state against the real game without
@@ -76,6 +77,11 @@ init
 			// Let a heartbeat out first; the canary runner wants at least one before a verdict.
 			doAfter(3.) ->
 				E2E.finish()
+
+	E2E.register("bench-unit-index") ->
+		runUnitIndexBench()
+		doAfter(3.) ->
+			E2E.finish()
 
 	E2E.bootstrap("canary")
 	if E2E.isActive()
