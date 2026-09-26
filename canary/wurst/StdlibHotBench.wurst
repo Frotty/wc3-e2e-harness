@@ -155,13 +155,18 @@ int fired = 0
 
 timer array nativeTimers
 
+/** The expiry handler of the native timers: the same increment a doAfter closure makes. */
+function nativeTimerExpired()
+	fired++
+
 /** Keeps its timers running until after the marker, like the doAfter block, so both
-	blocks hold the same number of live timers and time only the scheduling. */
+	blocks hold the same number of live timers and time only the scheduling. Each timer
+	gets a real handler, as every doAfter does. */
 function timersNative()
 	start("timer-schedule-native")
 	for i = 1 to TIMERS
 		let t = CreateTimer()
-		TimerStart(t, 30., false, null)
+		TimerStart(t, 30., false, function nativeTimerExpired)
 		nativeTimers[i] = t
 	stop("timer-schedule-native")
 	for i = 1 to TIMERS
