@@ -1,0 +1,318 @@
+package StdlibHotBench
+import E2E
+import ArrayList
+import ClosureForGroups
+import ClosureTimers
+import TimerUtils
+import SpatialIndexForUnits
+import UnitIds
+import Vectors
+import ErrorHandling
+import DamageEvent
+import Execute
+
+/*	Benchmarks stdlib paths real maps run every frame, in the real game on
+	Lua: string building, vector math, unit enumeration in a range,
+	scheduling closure timers, and dispatching damage events. Each block has a hand-written reference that
+	does the same work with plain natives and reals, so the stdlib's own cost
+	is the difference.
+
+	Blocks are bracketed by Preload marker files like the other bench suites
+	(node/canary/read-bench-markers.cjs) and accumulate into locals, folding
+	into a checksum once per block. */
+
+constant STRINGS = 200000
+constant VECTORS = 2000000
+constant QUERIES = 20000
+constant TIMERS = 20000
+constant DAMAGES = 20000
+constant UNIT_COUNT = 64
+constant QUERY_RADIUS = 256.
+
+unit array units
+var checksum = 0
+var realChecksum = 0.
+
+function marker(string name)
+	PreloadGenClear()
+	PreloadGenStart()
+	Preload(name)
+	PreloadGenEnd("wc3-e2e/canary/bench-" + name + ".txt")
+
+function start(string block)
+	marker(block + "-start")
+
+function stop(string block)
+	marker(block + "-end")
+
+// ---------------------------------------------------------------------------
+// Strings
+// ---------------------------------------------------------------------------
+
+function stringsNative()
+	var total = 0
+	start("string-concat-i2s")
+	for i = 1 to STRINGS
+		let s = "unit " + I2S(i)
+		total += StringLength(s)
+	stop("string-concat-i2s")
+	checksum += total
+
+function stringsToString()
+	var total = 0
+	start("string-concat-tostring")
+	for i = 1 to STRINGS
+		let s = "unit " + i.toString()
+		total += s.length()
+	stop("string-concat-tostring")
+	checksum += total
+
+function stringsThreeParts()
+	var total = 0
+	start("string-concat-three")
+	for i = 1 to STRINGS
+		let s = "unit " + i.toString() + " of " + STRINGS.toString()
+		total += s.length()
+	stop("string-concat-three")
+	checksum += total
+
+// ---------------------------------------------------------------------------
+// Vectors
+// ---------------------------------------------------------------------------
+
+function vectorsReals()
+	var x = 0.
+	var y = 0.
+	var sum = 0.
+	start("vector-polar-reals")
+	for i = 1 to VECTORS
+		x = x + 1. * Cos(0.1)
+		y = y + 1. * Sin(0.1)
+		let dx = x - 5.
+		let dy = y - 7.
+		sum += SquareRoot(dx * dx + dy * dy)
+	stop("vector-polar-reals")
+	realChecksum += sum
+
+function vectorsVec2()
+	var p = vec2(0., 0.)
+	let target = vec2(5., 7.)
+	var sum = 0.
+	start("vector-polar-vec2")
+	for i = 1 to VECTORS
+		p = p.polarOffset(angle(0.1), 1.)
+		sum += p.distanceTo(target)
+	stop("vector-polar-vec2")
+	realChecksum += sum
+
+// ---------------------------------------------------------------------------
+// Unit enumeration
+// ---------------------------------------------------------------------------
+
+group enumGroup = CreateGroup()
+// All three enumeration blocks count into globals: the closure block cannot write
+// a captured local, so the references count the same way to stay comparable.
+int foundByNative = 0
+int foundBySpatial = 0
+
+function enumNative()
+	foundByNative = 0
+	start("enum-range-native")
+	for q = 1 to QUERIES
+		GroupEnumUnitsInRange(enumGroup, -2000. + (q mod 16) * 32., 2000., QUERY_RADIUS, null)
+		var u = FirstOfGroup(enumGroup)
+		while u != null
+			foundByNative++
+			GroupRemoveUnit(enumGroup, u)
+			u = FirstOfGroup(enumGroup)
+	stop("enum-range-native")
+	checksum += foundByNative
+
+int foundByClosure = 0
+
+function enumClosure()
+	foundByClosure = 0
+	start("enum-range-forunitsinrange")
+	for q = 1 to QUERIES
+		forUnitsInRange(vec2(-2000. + (q mod 16) * 32., 2000.), QUERY_RADIUS) u ->
+			foundByClosure++
+	stop("enum-range-forunitsinrange")
+	checksum += foundByClosure
+
+function enumSpatial()
+	foundBySpatial = 0
+	let result = new ArrayList<unit>()
+	start("enum-range-spatial-index")
+	for q = 1 to QUERIES
+		result.clear()
+		unitsInRange(result, vec2(-2000. + (q mod 16) * 32., 2000.), QUERY_RADIUS)
+		for i = 0 to result.size() - 1
+			if result.get(i) != null
+				foundBySpatial++
+	stop("enum-range-spatial-index")
+	destroy result
+	checksum += foundBySpatial
+
+// ---------------------------------------------------------------------------
+// Scheduling closure timers (only the scheduling is timed; they fire later)
+// ---------------------------------------------------------------------------
+
+int fired = 0
+
+timer array nativeTimers
+
+/** The expiry handler of the native timers: the same increment a doAfter closure makes. */
+function nativeTimerExpired()
+	fired++
+
+/** Keeps its timers running until after the marker, like the doAfter block, so both
+	blocks hold the same number of live timers and time only the scheduling. Each timer
+	gets a real handler, as every doAfter does. */
+function timersNative()
+	start("timer-schedule-native")
+	for i = 1 to TIMERS
+		let t = CreateTimer()
+		TimerStart(t, 30., false, function nativeTimerExpired)
+		nativeTimers[i] = t
+	stop("timer-schedule-native")
+	for i = 1 to TIMERS
+		PauseTimer(nativeTimers[i])
+		DestroyTimer(nativeTimers[i])
+		nativeTimers[i] = null
+
+function timersDoAfter()
+	start("timer-schedule-doafter")
+	for i = 1 to TIMERS
+		doAfter(30.) ->
+			fired++
+	stop("timer-schedule-doafter")
+
+/** The data every closure timer attaches on start and reads back on expiry. */
+function timerDataSetGet()
+	var sum = 0
+	let t = getTimer()
+	start("timer-data-setget")
+	for i = 1 to VECTORS
+		t.setData(i)
+		sum += t.getData()
+	stop("timer-data-setget")
+	t.release()
+	checksum += sum
+
+// ---------------------------------------------------------------------------
+// Damage events. UnitDamageTarget fires the damage event synchronously, so a
+// loop of damage calls times the whole dispatch per instance. The canary
+// imports DamageEvent (through the stdlib in-game suite), so its own handler
+// runs in both blocks; the second adds one listener on top.
+// ---------------------------------------------------------------------------
+
+unit damageSource
+unit damageTarget
+int damageSeen = 0
+
+function damageSetup()
+	damageSource = CreateUnit(players[0], UnitIds.footman, 1000., 1000., 0.)
+	damageTarget = CreateUnit(players[1], UnitIds.footman, 1030., 1000., 0.)
+	BlzSetUnitMaxHP(damageTarget, 100000000)
+	SetUnitState(damageTarget, UNIT_STATE_LIFE, 100000000.)
+
+function damageNoListener()
+	start("damage-no-listener")
+	for i = 1 to DAMAGES
+		UnitDamageTarget(damageSource, damageTarget, 1., false, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_UNIVERSAL, WEAPON_TYPE_WHOKNOWS)
+	stop("damage-no-listener")
+
+int rawDamageSeen = 0
+
+/** A plain trigger on the same event: the cost of one more engine-to-Lua dispatch. */
+function damageRawTrigger()
+	let trig = CreateTrigger()
+	TriggerRegisterAnyUnitEventBJ(trig, EVENT_PLAYER_UNIT_DAMAGED)
+	TriggerAddAction(trig, () -> begin
+		rawDamageSeen++
+	end)
+	start("damage-plus-raw-trigger")
+	for i = 1 to DAMAGES
+		UnitDamageTarget(damageSource, damageTarget, 1., false, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_UNIVERSAL, WEAPON_TYPE_WHOKNOWS)
+	stop("damage-plus-raw-trigger")
+	DestroyTrigger(trig)
+	E2E.assertTrue("raw-trigger-saw-every-hit", rawDamageSeen == DAMAGES)
+
+function damageOneListener()
+	let listener = DamageEvent.addListener() ->
+		damageSeen++
+	start("damage-one-listener")
+	for i = 1 to DAMAGES
+		UnitDamageTarget(damageSource, damageTarget, 1., false, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_UNIVERSAL, WEAPON_TYPE_WHOKNOWS)
+	stop("damage-one-listener")
+	destroy listener
+	E2E.assertTrue("damage-listener-saw-every-hit", damageSeen == DAMAGES)
+
+// ---------------------------------------------------------------------------
+
+function guarded(string block, ForForceCallback body)
+	let ok = try(body)
+	E2E.assertTrue(block, ok)
+	if not ok
+		print("bench block " + block + " crashed: " + lastError)
+
+/*	The blocks run one at a time instead of back to back: all of them together
+	block the game for over ten seconds, and the map's heartbeat, which the
+	runner watches for stalls, only goes out between them. The E2E heartbeat is a
+	2 s game-time timer and a block advances no game time, so the gap between
+	blocks is a little longer than that: every gap lets one heartbeat out. */
+constant BLOCK_GAP = 2.2
+string array queuedNames
+ForForceCallback array queuedBodies
+int queuedCount = 0
+int queuedNext = 0
+
+function queue(string block, ForForceCallback body)
+	queuedNames[queuedCount] = block
+	queuedBodies[queuedCount] = body
+	queuedCount++
+
+function runNext()
+	if queuedNext < queuedCount
+		let i = queuedNext
+		queuedNext++
+		guarded(queuedNames[i], queuedBodies[i])
+		doAfter(BLOCK_GAP) ->
+			runNext()
+	else
+		finishBench()
+
+function finishBench()
+	RemoveUnit(damageSource)
+	RemoveUnit(damageTarget)
+	for i = 0 to UNIT_COUNT - 1
+		RemoveUnit(units[i])
+	E2E.recordMetric("checksum", checksum.toReal())
+	E2E.recordMetric("realChecksum", realChecksum)
+	E2E.assertTrue("bench-ran", checksum != 0)
+	doAfter(3.) ->
+		E2E.finish()
+
+/** Runs every block, one per timer tick, and finishes the E2E suite. */
+public function runStdlibHotBench()
+	start("empty")
+	stop("empty")
+	for i = 0 to UNIT_COUNT - 1
+		units[i] = CreateUnit(players[0], UnitIds.footman, -2000. + (i mod 16) * 32., 2000. + (i div 16) * 32., 0.)
+	damageSetup()
+
+	queue("string-concat-i2s", () -> stringsNative())
+	queue("string-concat-tostring", () -> stringsToString())
+	queue("string-concat-three", () -> stringsThreeParts())
+	queue("vector-polar-reals", () -> vectorsReals())
+	queue("vector-polar-vec2", () -> vectorsVec2())
+	queue("enum-range-native", () -> enumNative())
+	queue("enum-range-forunitsinrange", () -> enumClosure())
+	queue("enum-range-spatial-index", () -> enumSpatial())
+	queue("timer-schedule-native", () -> timersNative())
+	queue("timer-schedule-doafter", () -> timersDoAfter())
+	queue("timer-data-setget", () -> timerDataSetGet())
+	queue("damage-no-listener", () -> damageNoListener())
+	queue("damage-plus-raw-trigger", () -> damageRawTrigger())
+	queue("damage-one-listener", () -> damageOneListener())
+	runNext()
