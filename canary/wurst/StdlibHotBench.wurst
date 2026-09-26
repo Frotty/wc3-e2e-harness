@@ -1,0 +1,212 @@
+package StdlibHotBench
+import E2E
+import ArrayList
+import ClosureForGroups
+import ClosureTimers
+import TimerUtils
+import SpatialIndexForUnits
+import UnitIds
+import Vectors
+import ErrorHandling
+import Execute
+
+/*	Benchmarks stdlib paths real maps run every frame, in the real game on
+	Lua: string building, vector math, unit enumeration in a range, and
+	scheduling closure timers. Each block has a hand-written reference that
+	does the same work with plain natives and reals, so the stdlib's own cost
+	is the difference.
+
+	Blocks are bracketed by Preload marker files like the other bench suites
+	(node/canary/read-bench-markers.cjs) and accumulate into locals, folding
+	into a checksum once per block. */
+
+constant STRINGS = 200000
+constant VECTORS = 2000000
+constant QUERIES = 20000
+constant TIMERS = 20000
+constant UNIT_COUNT = 64
+constant QUERY_RADIUS = 256.
+
+unit array units
+var checksum = 0
+var realChecksum = 0.
+
+function marker(string name)
+	PreloadGenClear()
+	PreloadGenStart()
+	Preload(name)
+	PreloadGenEnd("wc3-e2e/canary/bench-" + name + ".txt")
+
+function start(string block)
+	marker(block + "-start")
+
+function stop(string block)
+	marker(block + "-end")
+
+// ---------------------------------------------------------------------------
+// Strings
+// ---------------------------------------------------------------------------
+
+function stringsNative()
+	var total = 0
+	start("string-concat-i2s")
+	for i = 1 to STRINGS
+		let s = "unit " + I2S(i)
+		total += StringLength(s)
+	stop("string-concat-i2s")
+	checksum += total
+
+function stringsToString()
+	var total = 0
+	start("string-concat-tostring")
+	for i = 1 to STRINGS
+		let s = "unit " + i.toString()
+		total += s.length()
+	stop("string-concat-tostring")
+	checksum += total
+
+function stringsThreeParts()
+	var total = 0
+	start("string-concat-three")
+	for i = 1 to STRINGS
+		let s = "unit " + i.toString() + " of " + STRINGS.toString()
+		total += s.length()
+	stop("string-concat-three")
+	checksum += total
+
+// ---------------------------------------------------------------------------
+// Vectors
+// ---------------------------------------------------------------------------
+
+function vectorsReals()
+	var x = 0.
+	var y = 0.
+	var sum = 0.
+	start("vector-polar-reals")
+	for i = 1 to VECTORS
+		x = x + 1. * Cos(0.1)
+		y = y + 1. * Sin(0.1)
+		let dx = x - 5.
+		let dy = y - 7.
+		sum += SquareRoot(dx * dx + dy * dy)
+	stop("vector-polar-reals")
+	realChecksum += sum
+
+function vectorsVec2()
+	var p = vec2(0., 0.)
+	let target = vec2(5., 7.)
+	var sum = 0.
+	start("vector-polar-vec2")
+	for i = 1 to VECTORS
+		p = p.polarOffset(angle(0.1), 1.)
+		sum += p.distanceTo(target)
+	stop("vector-polar-vec2")
+	realChecksum += sum
+
+// ---------------------------------------------------------------------------
+// Unit enumeration
+// ---------------------------------------------------------------------------
+
+group enumGroup = CreateGroup()
+
+function enumNative()
+	var found = 0
+	start("enum-range-native")
+	for q = 1 to QUERIES
+		GroupEnumUnitsInRange(enumGroup, -2000. + (q mod 16) * 32., 2000., QUERY_RADIUS, null)
+		var u = FirstOfGroup(enumGroup)
+		while u != null
+			found++
+			GroupRemoveUnit(enumGroup, u)
+			u = FirstOfGroup(enumGroup)
+	stop("enum-range-native")
+	checksum += found
+
+int foundByClosure = 0
+
+function enumClosure()
+	foundByClosure = 0
+	start("enum-range-forunitsinrange")
+	for q = 1 to QUERIES
+		forUnitsInRange(vec2(-2000. + (q mod 16) * 32., 2000.), QUERY_RADIUS) u ->
+			foundByClosure++
+	stop("enum-range-forunitsinrange")
+	checksum += foundByClosure
+
+function enumSpatial()
+	var found = 0
+	let result = new ArrayList<unit>()
+	start("enum-range-spatial-index")
+	for q = 1 to QUERIES
+		result.clear()
+		unitsInRange(result, vec2(-2000. + (q mod 16) * 32., 2000.), QUERY_RADIUS)
+		found += result.size()
+	stop("enum-range-spatial-index")
+	destroy result
+	checksum += found
+
+// ---------------------------------------------------------------------------
+// Scheduling closure timers (only the scheduling is timed; they fire later)
+// ---------------------------------------------------------------------------
+
+int fired = 0
+
+function timersNative()
+	start("timer-schedule-native")
+	for i = 1 to TIMERS
+		let t = CreateTimer()
+		TimerStart(t, 30., false, null)
+		PauseTimer(t)
+		DestroyTimer(t)
+	stop("timer-schedule-native")
+
+function timersDoAfter()
+	start("timer-schedule-doafter")
+	for i = 1 to TIMERS
+		doAfter(30.) ->
+			fired++
+	stop("timer-schedule-doafter")
+
+/** The data every closure timer attaches on start and reads back on expiry. */
+function timerDataSetGet()
+	var sum = 0
+	let t = getTimer()
+	start("timer-data-setget")
+	for i = 1 to VECTORS
+		t.setData(i)
+		sum += t.getData()
+	stop("timer-data-setget")
+	t.release()
+	checksum += sum
+
+// ---------------------------------------------------------------------------
+
+function guarded(string block, ForForceCallback body)
+	let ok = try(body)
+	E2E.assertTrue(block, ok)
+	if not ok
+		print("bench block " + block + " crashed: " + lastError)
+
+public function runStdlibHotBench()
+	start("empty")
+	stop("empty")
+	for i = 0 to UNIT_COUNT - 1
+		units[i] = CreateUnit(players[0], UnitIds.footman, -2000. + (i mod 16) * 32., 2000. + (i div 16) * 32., 0.)
+
+	guarded("string-concat-i2s", () -> stringsNative())
+	guarded("string-concat-tostring", () -> stringsToString())
+	guarded("string-concat-three", () -> stringsThreeParts())
+	guarded("vector-polar-reals", () -> vectorsReals())
+	guarded("vector-polar-vec2", () -> vectorsVec2())
+	guarded("enum-range-native", () -> enumNative())
+	guarded("enum-range-forunitsinrange", () -> enumClosure())
+	guarded("enum-range-spatial-index", () -> enumSpatial())
+	guarded("timer-schedule-native", () -> timersNative())
+	guarded("timer-schedule-doafter", () -> timersDoAfter())
+	guarded("timer-data-setget", () -> timerDataSetGet())
+
+	for i = 0 to UNIT_COUNT - 1
+		RemoveUnit(units[i])
+	E2E.recordMetric("checksum", checksum.toReal())
+	E2E.recordMetric("realChecksum", realChecksum)
+	E2E.assertTrue("bench-ran", checksum != 0)
