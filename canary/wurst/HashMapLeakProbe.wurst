@@ -1,0 +1,75 @@
+package HashMapLeakProbe
+import E2E
+import HashMap
+import HashSet
+import ErrorHandling
+import Execute
+
+/*	Counts what the old-generic collections leave behind for the rest of the
+	game, in the real client, on Lua.
+
+	The Lua backend's typecasting index map keeps every entry it hands out
+	forever (see LuaPolyfillSetup). Warcraft's Lua has no collectgarbage, so
+	instead of reading memory the probe reads that map's counter: on Lua,
+	GetHandleId of a fresh handle is the next index. The difference between a
+	fresh id taken before and one taken after a probe is how many permanent
+	entries the probe created.
+
+	Each probe fills a collection with KEYS distinct int keys (and distinct
+	values), reads them back, and destroys it. Ints need no index entry at all,
+	so anything close to KEYS entries means every key or value was boxed. */
+
+constant KEYS = 100000
+
+// Written from inside try() closures, which capture locals by value.
+int mapEntries = -1
+int setEntries = -1
+
+/** The next typecasting index; allocating it costs exactly one entry. */
+function nextIndex() returns int
+	let t = CreateTimer()
+	let id = GetHandleId(t)
+	DestroyTimer(t)
+	return id
+
+function probeHashMap() returns int
+	let before = nextIndex()
+	let map = new HashMap<int, int>()
+	for i = 1 to KEYS
+		map.put(1000000 + i * 13, i * 7)
+	var wrong = 0
+	for i = 1 to KEYS
+		if map.get(1000000 + i * 13) != i * 7
+			wrong++
+	destroy map
+	E2E.assertTrue("hashmap-values-read-back", wrong == 0)
+	return nextIndex() - before - 1
+
+function probeHashSet() returns int
+	let before = nextIndex()
+	let set = new HashSet<int>()
+	for i = 1 to KEYS
+		set.add(2000000 + i * 17)
+	var found = 0
+	for i = 1 to KEYS
+		if set.has(2000000 + i * 17)
+			found++
+	destroy set
+	E2E.assertTrue("hashset-members-found", found == KEYS)
+	return nextIndex() - before - 1
+
+/** Runs both probes; each fails its assertion if it leaves more than a handful of entries. */
+public function runHashMapLeakProbe()
+	if not try(() -> begin
+		mapEntries = probeHashMap()
+	end)
+		E2E.assertTrue("hashmap-probe-crashed: " + lastError, false)
+	if not try(() -> begin
+		setEntries = probeHashSet()
+	end)
+		E2E.assertTrue("hashset-probe-crashed: " + lastError, false)
+	E2E.recordMetric("keys", KEYS.toReal())
+	E2E.recordMetric("hashmapRetainedEntries", mapEntries.toReal())
+	E2E.recordMetric("hashsetRetainedEntries", setEntries.toReal())
+	E2E.assertTrue("hashmap-leaves-no-entries", mapEntries >= 0 and mapEntries < 16)
+	E2E.assertTrue("hashset-leaves-no-entries", setEntries >= 0 and setEntries < 16)
