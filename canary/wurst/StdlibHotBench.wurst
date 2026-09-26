@@ -8,11 +8,12 @@ import SpatialIndexForUnits
 import UnitIds
 import Vectors
 import ErrorHandling
+import DamageEvent
 import Execute
 
 /*	Benchmarks stdlib paths real maps run every frame, in the real game on
-	Lua: string building, vector math, unit enumeration in a range, and
-	scheduling closure timers. Each block has a hand-written reference that
+	Lua: string building, vector math, unit enumeration in a range,
+	scheduling closure timers, and dispatching damage events. Each block has a hand-written reference that
 	does the same work with plain natives and reals, so the stdlib's own cost
 	is the difference.
 
@@ -24,6 +25,7 @@ constant STRINGS = 200000
 constant VECTORS = 2000000
 constant QUERIES = 20000
 constant TIMERS = 20000
+constant DAMAGES = 20000
 constant UNIT_COUNT = 64
 constant QUERY_RADIUS = 256.
 
@@ -151,14 +153,21 @@ function enumSpatial()
 
 int fired = 0
 
+timer array nativeTimers
+
+/** Keeps its timers running until after the marker, like the doAfter block, so both
+	blocks hold the same number of live timers and time only the scheduling. */
 function timersNative()
 	start("timer-schedule-native")
 	for i = 1 to TIMERS
 		let t = CreateTimer()
 		TimerStart(t, 30., false, null)
-		PauseTimer(t)
-		DestroyTimer(t)
+		nativeTimers[i] = t
 	stop("timer-schedule-native")
+	for i = 1 to TIMERS
+		PauseTimer(nativeTimers[i])
+		DestroyTimer(nativeTimers[i])
+		nativeTimers[i] = null
 
 function timersDoAfter()
 	start("timer-schedule-doafter")
@@ -178,6 +187,55 @@ function timerDataSetGet()
 	stop("timer-data-setget")
 	t.release()
 	checksum += sum
+
+// ---------------------------------------------------------------------------
+// Damage events. UnitDamageTarget fires the damage event synchronously, so a
+// loop of damage calls times the whole dispatch per instance. The canary
+// imports DamageEvent (through the stdlib in-game suite), so its own handler
+// runs in both blocks; the second adds one listener on top.
+// ---------------------------------------------------------------------------
+
+unit damageSource
+unit damageTarget
+int damageSeen = 0
+
+function damageSetup()
+	damageSource = CreateUnit(players[0], UnitIds.footman, 1000., 1000., 0.)
+	damageTarget = CreateUnit(players[1], UnitIds.footman, 1030., 1000., 0.)
+	BlzSetUnitMaxHP(damageTarget, 100000000)
+	SetUnitState(damageTarget, UNIT_STATE_LIFE, 100000000.)
+
+function damageNoListener()
+	start("damage-no-listener")
+	for i = 1 to DAMAGES
+		UnitDamageTarget(damageSource, damageTarget, 1., false, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_UNIVERSAL, WEAPON_TYPE_WHOKNOWS)
+	stop("damage-no-listener")
+
+int rawDamageSeen = 0
+
+/** A plain trigger on the same event: the cost of one more engine-to-Lua dispatch. */
+function damageRawTrigger()
+	let trig = CreateTrigger()
+	TriggerRegisterAnyUnitEventBJ(trig, EVENT_PLAYER_UNIT_DAMAGED)
+	TriggerAddAction(trig, () -> begin
+		rawDamageSeen++
+	end)
+	start("damage-plus-raw-trigger")
+	for i = 1 to DAMAGES
+		UnitDamageTarget(damageSource, damageTarget, 1., false, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_UNIVERSAL, WEAPON_TYPE_WHOKNOWS)
+	stop("damage-plus-raw-trigger")
+	DestroyTrigger(trig)
+	E2E.assertTrue("raw-trigger-saw-every-hit", rawDamageSeen == DAMAGES)
+
+function damageOneListener()
+	let listener = DamageEvent.addListener() ->
+		damageSeen++
+	start("damage-one-listener")
+	for i = 1 to DAMAGES
+		UnitDamageTarget(damageSource, damageTarget, 1., false, false, ATTACK_TYPE_CHAOS, DAMAGE_TYPE_UNIVERSAL, WEAPON_TYPE_WHOKNOWS)
+	stop("damage-one-listener")
+	destroy listener
+	E2E.assertTrue("damage-listener-saw-every-hit", damageSeen == DAMAGES)
 
 // ---------------------------------------------------------------------------
 
@@ -204,6 +262,12 @@ public function runStdlibHotBench()
 	guarded("timer-schedule-native", () -> timersNative())
 	guarded("timer-schedule-doafter", () -> timersDoAfter())
 	guarded("timer-data-setget", () -> timerDataSetGet())
+	damageSetup()
+	guarded("damage-no-listener", () -> damageNoListener())
+	guarded("damage-plus-raw-trigger", () -> damageRawTrigger())
+	guarded("damage-one-listener", () -> damageOneListener())
+	RemoveUnit(damageSource)
+	RemoveUnit(damageTarget)
 
 	for i = 0 to UNIT_COUNT - 1
 		RemoveUnit(units[i])
