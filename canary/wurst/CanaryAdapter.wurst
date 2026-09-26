@@ -6,6 +6,7 @@ import HashMap
 import StdlibIngameTests
 import UnitIndexBench
 import CollectionsBench
+import GroupBench
 
 /*  Canary suites (plan: "Native canary suites"). This repository's own map is
 	the canary: it exercises every runtime state against the real game without
@@ -19,6 +20,7 @@ import CollectionsBench
 	stdlib-ingame the standard library's own in-game suite, one assert per check
 	bench-unit-index   per-unit index stores timed against each other
 	bench-collections  ArrayList and LinkedList timed against a bare array
+	bench-groups       the ways of iterating a unit group
 
 	The bench suites write Preload marker files around every block; read the
 	timings with node/canary/read-bench-markers.cjs after the run.
@@ -89,6 +91,12 @@ init
 		// RUNNING state and a heartbeat are out; the runner requires both.
 		doAfter(2.5) ->
 			runUnitIndexBench()
+			doAfter(3.) ->
+				E2E.finish()
+
+	E2E.register("bench-groups") ->
+		doAfter(2.5) ->
+			runGroupBench()
 			doAfter(3.) ->
 				E2E.finish()
 
