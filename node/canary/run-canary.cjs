@@ -30,6 +30,8 @@ const SUITE_TIMEOUTS_MS = {
   "bench-unit-index": 600_000,
   "bench-collections": 600_000,
   "bench-groups": 600_000,
+  "leak-hashmap": 300_000,
+  "bench-stdlib-hot": 600_000,
 };
 
 function argumentValue(name, fallback = null) {
