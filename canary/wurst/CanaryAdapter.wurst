@@ -6,6 +6,7 @@ import HashMap
 import StdlibIngameTests
 import UnitIndexBench
 import CollectionsBench
+import HashMapLeakProbe
 import StdlibHotBench
 
 /*  Canary suites (plan: "Native canary suites"). This repository's own map is
@@ -20,6 +21,7 @@ import StdlibHotBench
 	stdlib-ingame the standard library's own in-game suite, one assert per check
 	bench-unit-index   per-unit index stores timed against each other
 	bench-collections  ArrayList and LinkedList timed against a bare array
+	leak-hashmap       Lua memory an old-generic HashMap/HashSet keeps after destroy
 	bench-stdlib-hot   strings, vectors, unit enumeration and timers against natives
 
 	The bench suites write Preload marker files around every block; read the
@@ -94,6 +96,11 @@ init
 			doAfter(3.) ->
 				E2E.finish()
 
+	E2E.register("leak-hashmap") ->
+		doAfter(2.5) ->
+			runHashMapLeakProbe()
+			doAfter(3.) ->
+				E2E.finish()
 	E2E.register("bench-stdlib-hot") ->
 		// Finishes the suite itself, after its last block.
 		doAfter(2.5) ->
